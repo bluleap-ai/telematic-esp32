@@ -6,8 +6,7 @@ use esp_wifi::wifi::{
     WifiState,
 };
 
-const SSID: &str = env!("SSID");
-const PASSWORD: &str = env!("PASSWORD");
+use crate::cfg::net_cfg::{WIFI_PSWD, WIFI_SSID};
 
 #[embassy_executor::task]
 pub async fn connection(mut controller: WifiController<'static>) {
@@ -25,8 +24,8 @@ pub async fn connection(mut controller: WifiController<'static>) {
         }
         if !matches!(controller.is_started(), Ok(true)) {
             let client_config = Configuration::Client(ClientConfiguration {
-                ssid: SSID.try_into().unwrap(),
-                password: PASSWORD.try_into().unwrap(),
+                ssid: WIFI_SSID.try_into().unwrap(),
+                password: WIFI_PSWD.try_into().unwrap(),
                 ..Default::default()
             });
             controller.set_configuration(&client_config).unwrap();

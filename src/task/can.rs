@@ -1,17 +1,24 @@
+use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel};
+use embedded_can::{Frame, Id};
 use esp_hal::twai::TwaiRx;
 use log::{error, info};
 
-use crate::{CanFrame, TwaiOutbox};
-use embedded_can::{Frame, Id};
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct CanFrame {
+    pub id: u32,
+    pub len: u8,
+    pub data: [u8; 8],
+}
 
-// const MQTT_CAN_PACKET: u32 = 0x00001234;
+pub type TwaiOutbox = Channel<NoopRawMutex, CanFrame, 16>;
 
 #[embassy_executor::task]
 pub async fn can_receiver(
     mut rx: TwaiRx<'static, esp_hal::Async>,
     channel: &'static TwaiOutbox,
 ) -> ! {
-    info!("Hello CANRx !!\r");
+    info!("Hello Can Rx Task !!\r");
     loop {
         let frame = rx.receive_async().await;
 

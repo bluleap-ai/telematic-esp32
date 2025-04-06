@@ -3,27 +3,19 @@ use embassy_net::{
     Ipv4Address, Stack,
 };
 use embassy_time::{Duration, Timer};
-use esp_hal::{
-    peripherals::{RSA, SHA},
-    rng::Trng,
-};
+use esp_hal::peripherals::{RSA, SHA};
 use esp_mbedtls::{asynch::Session, Certificates, Mode, Tls, TlsVersion, X509};
 use esp_println::println;
 use log::{error, info};
 
-use crate::{
-    dns::DnsBuilder,
-    mqtt::MqttClient,
-    tasks::{MQTT_CLIENT_ID, MQTT_USR_NAME, MQTT_USR_PASS, SERVERNAME},
-    TwaiOutbox,
-};
+use crate::svc::{dns::DnsBuilder, mqtt::MqttClient};
 
-use super::{MQTT_SERVERNAME, MQTT_SERVERPORT};
+use crate::cfg::net_cfg::*;
+use crate::task::can::TwaiOutbox;
 
 #[embassy_executor::task]
 pub async fn mqtt_handler(
     stack: &'static Stack<'static>,
-    _trng: &'static mut Trng<'static>,
     channel: &'static TwaiOutbox,
     mut sha: SHA,
     mut rsa: RSA,
@@ -60,9 +52,11 @@ pub async fn mqtt_handler(
         let mut socket = TcpSocket::new(*stack, &mut rx_buffer, &mut tx_buffer);
         socket.connect(remote_endpoint).await.unwrap();
         let certificates = Certificates {
-            ca_chain: X509::pem(concat!(include_str!("../cert/crt.pem"), "\0").as_bytes()).ok(),
-            certificate: X509::pem(concat!(include_str!("../cert/dvt.crt"), "\0").as_bytes()).ok(),
-            private_key: X509::pem(concat!(include_str!("../cert/dvt.key"), "\0").as_bytes()).ok(),
+            ca_chain: X509::pem(concat!(include_str!("../../cert/crt.pem"), "\0").as_bytes()).ok(),
+            certificate: X509::pem(concat!(include_str!("../../cert/dvt.crt"), "\0").as_bytes())
+                .ok(),
+            private_key: X509::pem(concat!(include_str!("../../cert/dvt.key"), "\0").as_bytes())
+                .ok(),
             password: None,
         };
 
@@ -70,7 +64,7 @@ pub async fn mqtt_handler(
         let session = Session::new(
             socket,
             Mode::Client {
-                servername: SERVERNAME,
+                servername: MQTT_CSTR_SERVER_NAME,
             },
             TlsVersion::Tls1_3,
             certificates,
@@ -136,7 +130,7 @@ pub async fn dns_query(
         port: 53,
     };
     socket.connect(remote_endpoint).await?;
-    let dns_builder = DnsBuilder::build(MQTT_SERVERNAME);
+    let dns_builder = DnsBuilder::build(MQTT_SERVER_NAME);
     socket.write(&dns_builder.query_data()).await.unwrap();
 
     let size = socket.read(&mut buffer).await.unwrap();
@@ -155,7 +149,7 @@ pub async fn dns_query(
 
     let remote_endpoint = embassy_net::IpEndpoint {
         addr: embassy_net::IpAddress::Ipv4(broker_ipv4),
-        port: MQTT_SERVERPORT,
+        port: MQTT_SERVER_PORT,
     };
     Ok(remote_endpoint)
 }

@@ -1,10 +1,29 @@
 #![no_std]
 #![no_main]
 
+// Declare modules at the crate root
+mod cfg;
+mod svc;
+mod task;
+mod util;
+
+// Import the necessary modules
+use crate::svc::atcmd::Urc;
+
+use task::can::*;
+use task::lte::*;
+use task::mqtt::*;
+#[cfg(feature = "ota")]
+use task::ota::ota_handler;
+use task::wifi::*;
+
+// Import the necessary modules
 use atat::{ResponseSlot, UrcChannel};
 use embassy_executor::Spawner;
 use embassy_net::{Stack, StackResources};
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel};
+use embassy_sync::channel::Channel;
+#[cfg(feature = "ota")]
+use embassy_time::Duration;
 use embassy_time::Timer;
 use esp_backtrace as _;
 #[cfg(feature = "wdg")]
@@ -19,6 +38,8 @@ use esp_hal::{
 };
 use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
 
+use static_cell::StaticCell;
+
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
         static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
@@ -27,26 +48,6 @@ macro_rules! mk_static {
         x
     }};
 }
-
-#[derive(Debug)]
-#[allow(dead_code)]
-struct CanFrame {
-    id: u32,
-    len: u8,
-    data: [u8; 8],
-}
-
-type TwaiOutbox = Channel<NoopRawMutex, CanFrame, 16>;
-
-mod at_command;
-mod dns;
-mod esp_nvs;
-mod mqtt;
-mod tasks;
-use static_cell::StaticCell;
-use tasks::{
-    can_receiver, connection, mqtt_handler, net_task, quectel_rx_handler, quectel_tx_handler,
-};
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
@@ -61,8 +62,10 @@ async fn main(spawner: Spawner) -> ! {
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     esp_hal_embassy::init(timg1.timer0);
     let trng = &mut *mk_static!(Trng<'static>, Trng::new(peripherals.RNG, peripherals.ADC1));
-    // let mut trng = Trng::new(peripherals.RNG, peripherals.ADC1);
-    // let mut rng = Rng::new(peripherals.RNG);
+    //let trng = &*mk_static!(
+    //    Mutex<Trng<'static>, EspWifiController<'static>>,
+    //    Mutex::new(Trng::new(peripherals.RNG, peripherals.ADC1))
+    //);
     let init = &*mk_static!(
         EspWifiController<'static>,
         init(timg0.timer0, trng.rng, peripherals.RADIO_CLK).unwrap()
@@ -103,10 +106,10 @@ async fn main(spawner: Spawner) -> ! {
         .into_async();
     let (uart_rx, uart_tx) = uart0.split();
     static RES_SLOT: ResponseSlot<1024> = ResponseSlot::new();
-    static URC_CHANNEL: UrcChannel<at_command::common::Urc, 128, 3> = UrcChannel::new();
+    static URC_CHANNEL: UrcChannel<Urc, 128, 3> = UrcChannel::new();
     static INGRESS_BUF: StaticCell<[u8; 1024]> = StaticCell::new();
     let ingress = atat::Ingress::new(
-        atat::AtDigester::<at_command::common::Urc>::default(),
+        atat::AtDigester::<Urc>::default(),
         INGRESS_BUF.init([0; 1024]),
         &RES_SLOT,
         &URC_CHANNEL,
@@ -150,7 +153,6 @@ async fn main(spawner: Spawner) -> ! {
     spawner
         .spawn(mqtt_handler(
             stack,
-            trng,
             channel,
             peripherals.SHA,
             peripherals.RSA,
@@ -165,6 +167,21 @@ async fn main(spawner: Spawner) -> ! {
             &URC_CHANNEL,
         ))
         .ok();
+    #[cfg(feature = "ota")]
+    //wait until wifi connected
+    {
+        loop {
+            if stack.is_link_up() {
+                break;
+            }
+            Timer::after(Duration::from_millis(500)).await;
+        }
+        spawner
+            .spawn(ota_handler(spawner, trng, stack))
+            .expect("Failed to spawn OTA handler task");
+    }
+
+    // WDG feed task
     loop {
         Timer::after_secs(2).await;
         #[cfg(feature = "wdg")]

@@ -1,5 +1,5 @@
 [package]
-name = "iot-tracker-rs"
+name = "telematics-control-unit"
 version = "0.1.0"
 authors = ["tuemb <nvtu96@gmail.com>"]
 edition = "2021"
@@ -32,6 +32,11 @@ embassy-sync = "0.6.1"
 # ESP32 specific
 esp-println = { version = "0.13.0", features = ["esp32c6", "log"] }
 esp-wifi = { version = "0.12.0", features = ["esp32c6", "wifi"] }
+
+# OTA
+esp32-mender-client = { git = "https://github.com/virust-ai/esp32-mender-client", branch = "main", features = [
+    "esp32c6",
+] }
 
 # Other dependencies
 embedded-can = "0.4.1"
@@ -81,5 +86,5 @@ default = [
     "esp-storage/esp32c6",
     "esp-hal-embassy/esp32c6",
 ]
-
+ota = []
 wdg = []

@@ -18,31 +18,31 @@ pub enum NvsError {
 }
 
 #[allow(dead_code)]
-struct NvsConfig {
+struct NvmConf {
     pub addr: u32,
     pub size: usize,
 }
 
 #[allow(dead_code)]
-struct EspNvs {
-    blocks: [NvsConfig; 0x03],
+struct Nvm {
+    blocks: [NvmConf; 0x03],
     storage: FlashStorage,
 }
 
 #[allow(dead_code)]
-impl EspNvs {
+impl Nvm {
     pub fn init() -> Self {
         Self {
             blocks: [
-                NvsConfig {
+                NvmConf {
                     addr: 0x9000,
                     size: 2574,
                 },
-                NvsConfig {
+                NvmConf {
                     addr: 0xA000,
                     size: 1268,
                 },
-                NvsConfig {
+                NvmConf {
                     addr: 0xB000,
                     size: 1678,
                 },

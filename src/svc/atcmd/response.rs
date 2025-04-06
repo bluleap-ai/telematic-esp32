@@ -147,7 +147,7 @@ pub enum PowerDownMode {
     Normal = 1,
 }
 
-#[derive(Clone, AtatResp)]
+#[derive(Debug, Clone, AtatResp)]
 pub struct NoResponse;
 
 #[derive(Clone, AtatResp)]

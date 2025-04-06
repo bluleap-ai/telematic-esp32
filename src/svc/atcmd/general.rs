@@ -1,11 +1,8 @@
 //! ### 4 - General Commands
-pub mod responses;
-
 use atat::{atat_derive::AtatCmd, heapless_bytes::Bytes, AtatCmd};
 use heapless::String;
-use responses::*;
 
-use super::NoResponse;
+use super::response::*;
 
 /// Disable echo mode E0
 ///

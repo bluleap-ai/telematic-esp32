@@ -43,8 +43,12 @@ jobs:
         run: cargo fmt --all -- --check
         continue-on-error: false
 
-      - name: Clippy
+      - name: Clippy with ota
         run: cargo clippy --target riscv32imac-unknown-none-elf --features default -- -D warnings
+        continue-on-error: false
+
+      - name: Clippy withou ota
+        run: cargo clippy --target riscv32imac-unknown-none-elf --features ota -- -D warnings
         continue-on-error: false
 #  build:
 #    name: Build Firmware
