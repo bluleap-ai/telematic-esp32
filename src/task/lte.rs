@@ -550,9 +550,9 @@ pub async fn quectel_tx_handler(
     urc_channel: &'static UrcChannel<Urc, 128, 3>,
 ) -> ! {
     let mut state: State = State::ResetHardware;
-    let ca_chain = include_str!("../../cert/crt.pem").as_bytes();
-    let certificate = include_str!("../../cert/dvt.crt").as_bytes();
-    let private_key = include_str!("../../cert/dvt.key").as_bytes();
+    let ca_chain = include_str!("../../certs/crt.pem").as_bytes();
+    let certificate = include_str!("../../certs/dvt.crt").as_bytes();
+    let private_key = include_str!("../../certs/dvt.key").as_bytes();
 
     loop {
         match state {

@@ -1,9 +1,7 @@
-/target
-/Cargo.lock
-analyzer_target/debug/.fingerprint/anyhow-3a5c879162e0dac8/dep-lib-anyhow
-.gitignore
-build.bat
-log.txt
-cert/crt.pem
-cert/dvt.crt
-cert/dvt.key
+**/target
+**/Cargo.lock
+**/log.txt
+**/cert/crt.pem
+**/cert/dvt.crt
+**/cert/dvt.key
+**/net_cfg.rs
