@@ -3,12 +3,12 @@
 
 // Declare modules at the crate root
 mod cfg;
-mod svc;
+mod net;
 mod task;
 mod util;
 
 // Import the necessary modules
-use crate::svc::atcmd::Urc;
+use crate::net::atcmd::Urc;
 
 use task::can::*;
 use task::lte::*;

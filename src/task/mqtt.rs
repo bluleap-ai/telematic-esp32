@@ -8,7 +8,7 @@ use esp_mbedtls::{asynch::Session, Certificates, Mode, Tls, TlsVersion, X509};
 use esp_println::println;
 use log::{error, info};
 
-use crate::svc::{dns::DnsBuilder, mqtt::MqttClient};
+use crate::net::{dns::DnsBuilder, mqtt::MqttClient};
 
 use crate::cfg::net_cfg::*;
 use crate::task::can::TwaiOutbox;

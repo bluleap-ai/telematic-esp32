@@ -14,9 +14,9 @@ use esp_println::print;
 use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
 
-use crate::svc::atcmd::general::*;
-use crate::svc::atcmd::response::*;
-use crate::svc::atcmd::Urc;
+use crate::net::atcmd::general::*;
+use crate::net::atcmd::response::*;
+use crate::net::atcmd::Urc;
 
 use crate::cfg::net_cfg::*;
 

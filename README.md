@@ -44,7 +44,7 @@ src/
 ├── app/              # Application logic
 ├── cfg/              # Configuration
 ├── hal/              # Hardware abstraction
-├── svc/              # Reusable services
+├── net/              # Reusable services
 ├── task/             # Async/concurrent tasks
 ├── util/             # Utilities
 └── main.rs           # Entry point (initializes hardware, starts tasks)
