@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
+
 #[allow(unused_imports)]
-// Include the flash driver module directly
-#[path = "../../../../src/mem/ex_flash.rs"]
+#[path = "../../../src/mem/ex_flash.rs"]
 mod ex_flash;
 
 use embassy_executor::Spawner;

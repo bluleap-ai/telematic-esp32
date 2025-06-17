@@ -10,7 +10,6 @@ use esp_hal::{
     uart::{UartRx, UartTx},
     Async,
 };
-use esp_println::print;
 use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +54,8 @@ enum State {
     MqttConnectBroker,
     MqttPublishData,
     ErrorConnection,
+    //Connected,
+    //Disconnected,
 }
 
 async fn handle_publish_mqtt_data(
@@ -67,19 +68,18 @@ async fn handle_publish_mqtt_data(
 
     writeln!(
         &mut mqtt_topic,
-        "channels/{}/messages/client/trip",
-        mqtt_client_id
+        "channels/{mqtt_client_id}/messages/client/trip"
     )
     .unwrap();
 
     match client.send(&RetrieveGpsRmc).await {
         Ok(res) => {
-            info!("GPS RMC data received: {:?}", res);
+            info!("[Quectel] GPS RMC data received: {res:?}");
             let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
             let mut device_id = heapless::String::new();
             let mut trip_id = heapless::String::new();
-            write!(&mut trip_id, "{}", mqtt_client_id).unwrap();
-            write!(&mut device_id, "{}", mqtt_client_id).unwrap();
+            write!(&mut trip_id, "{mqtt_client_id}").unwrap();
+            write!(&mut device_id, "{mqtt_client_id}").unwrap();
 
             let trip_data = TripData {
                 device_id,
@@ -97,11 +97,11 @@ async fn handle_publish_mqtt_data(
                     .replace('\"', "'");
 
                 if payload.push_str(&single_quote).is_err() {
-                    error!("Payload buffer overflow");
+                    error!("[Quectel] Payload buffer overflow");
                     return false;
                 }
 
-                info!("MQTT payload: {}", payload);
+                info!("[Quectel] MQTT payload: {payload}");
                 check_result(
                     client
                         .send(&MqttPublishExtended {
@@ -115,12 +115,12 @@ async fn handle_publish_mqtt_data(
                         .await,
                 )
             } else {
-                error!("Failed to serialize trip data");
+                error!("[Quectel] Failed to serialize trip data");
                 false
             }
         }
         Err(e) => {
-            warn!("Failed to retrieve GPS data: {:?}", e);
+            warn!("[Quectel] Failed to retrieve GPS data: {e:?}");
             false
         }
     }
@@ -132,11 +132,11 @@ where
 {
     match res {
         Ok(value) => {
-            info!("\t Command succeeded: {:?}", value);
+            info!("[Quectel] \t Command succeeded: {value:?}");
             true
         }
         Err(e) => {
-            error!("Failed to send AT command: {:?}", e);
+            error!("[Quectel] Failed to send AT command: {e:?}");
             false
         }
     }
@@ -165,39 +165,39 @@ pub async fn upload_mqtt_cert_files(
         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
         match subscriber.try_next_message_pure() {
             Some(Urc::ListFile(file)) => {
-                log::info!("File: {:?}", file);
+                log::info!("[Quectel] File: {file:?}");
             }
             Some(e) => {
-                error!("Unknown URC {:?}", e);
+                error!("[Quectel] Unknown URC {e:?}");
             }
             None => {
-                info!("Waiting for response...");
+                info!("[Quectel] Waiting for response...");
             }
         }
         if now.elapsed().as_secs() > 10 {
             break;
         }
     }
-    info!("Quectel: remove CA_CRT path");
+    info!("[Quectel] remove CA_CRT path");
     let _ = client
         .send(&FileDel {
             name: heapless::String::from_str("crt.pem").unwrap(),
         })
         .await;
-    info!("Quectel: remove CLIENT_CRT path");
+    info!("[Quectel] remove CLIENT_CRT path");
     let _ = client
         .send(&FileDel {
             name: heapless::String::from_str("dvt.crt").unwrap(),
         })
         .await;
-    info!("Quectel: remove CLIENT_KEY path");
+    info!("[Quectel] remove CLIENT_KEY path");
     let _ = client
         .send(&FileDel {
             name: heapless::String::from_str("dvt.key").unwrap(),
         })
         .await;
     // Upload CA cert
-    info!("Quectel: Upload MQTT certs to quectel");
+    info!("[Quectel] Upload MQTT certs to quectel");
     let _ = raw_data.extend_from_slice(&ca_chain[0..1024]);
     let _ = client
         .send(&FileUpl {
@@ -276,7 +276,7 @@ pub async fn upload_mqtt_cert_files(
         })
         .await;
 
-    info!("Quectel: set MQTTS configuration");
+    info!("[Quectel] set MQTTS configuration");
     let _ = client
         .send(&MqttConfig {
             name: heapless::String::from_str("recv/mode").unwrap(),
@@ -357,46 +357,46 @@ pub async fn check_network_registration(
     while start_time.elapsed() < timeout {
         match client.send(&GetEPSNetworkRegistrationStatus {}).await {
             Ok(status) => {
-                log::info!("EPS network registration status: {:?}", status);
+                log::info!("[Quectel] EPS network registration status: {status:?}");
 
                 match status.stat {
                     REGISTERED_HOME => {
                         let elapsed = start_time.elapsed().as_secs();
-                        info!("Registered (Home) after {} seconds", elapsed);
+                        info!("[Quectel] Registered (Home) after {elapsed} seconds");
                         return true; // Successfully registered
                     }
                     UNREGISTERED_SEARCHING => {
-                        print!("."); // Indicating ongoing search
+                        esp_println::print!("."); // Indicating ongoing search
                         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
                     }
                     REGISTRATION_DENIED => {
-                        error!("Registration denied");
+                        error!("[Quectel] Registration denied");
                         return false; // Registration denied
                     }
                     REGISTRATION_FAILED => {
-                        error!("Registration failed");
+                        error!("[Quectel] Registration failed");
                         return false; // Registration failed
                     }
                     REGISTERED_ROAMING => {
                         let elapsed = start_time.elapsed().as_secs();
-                        info!("Registered (Roaming) after {} seconds", elapsed);
+                        info!("[Quectel] Registered (Roaming) after {elapsed} seconds");
                         return true; // Successfully registered
                     }
                     _ => {
-                        error!("Unknown registration status: {}", status.stat);
+                        error!("[Quectel] Unknown registration status: {}", status.stat);
                         return false; // Unknown status
                     }
                 }
             }
             Err(e) => {
-                error!("Failed to get EPS network registration status: {:?}", e);
+                error!("[Quectel] Failed to get EPS network registration status: {e:?}");
                 return false; // Error occurred
             }
         }
     }
 
     // Timeout reached without successful registration
-    error!("Network registration timed out");
+    error!("[Quectel] Network registration timed out");
     false
 }
 
@@ -426,7 +426,7 @@ pub async fn open_mqtt_connection(
         .await
         .map_err(|_| MqttConnectError::CommandFailed)?; // Optionally log the error here for more info
 
-    info!("MQTT open command sent, waiting for response...");
+    info!("[Quectel] MQTT open command sent, waiting for response...");
 
     let mut subscriber = urc_channel
         .subscribe()
@@ -438,7 +438,7 @@ pub async fn open_mqtt_connection(
     loop {
         // Check timeout first
         if start.elapsed() >= TIMEOUT {
-            error!("MQTT open timed out");
+            error!("[Quectel] MQTT open timed out");
             return Err(MqttConnectError::Timeout);
         }
 
@@ -446,21 +446,21 @@ pub async fn open_mqtt_connection(
 
         match subscriber.try_next_message_pure() {
             Some(Urc::MqttOpen(response)) => {
-                info!("Received MQTT open response: {:?}", response);
+                info!("[Quectel] Received MQTT open response: {response:?}");
                 return match response.result {
                     0 => Ok(()),
                     code => {
-                        error!("Modem reported error code: {}", code as u8);
+                        error!("[Quectel] Modem reported error code: {}", code as u8);
                         Err(MqttConnectError::ModemError(code as u8))
                     }
                 };
             }
             Some(other_urc) => {
-                info!("Received unrelated URC: {:?}", other_urc);
+                info!("[Quectel] Received unrelated URC: {other_urc:?}");
                 // Continue waiting for MQTT open response
             }
             None => {
-                warn!("No URC received yet...");
+                warn!("[Quectel] No URC received yet...");
             }
         }
     }
@@ -484,7 +484,7 @@ pub async fn connect_mqtt_broker(
 
     // Send connect command with retries
     for attempt in 1..=MAX_RETRIES {
-        info!("MQTT connect attempt {}/{}", attempt, MAX_RETRIES);
+        info!("[Quectel] MQTT connect attempt {attempt}/{MAX_RETRIES}");
 
         match client
             .send(&MqttConnect {
@@ -497,11 +497,11 @@ pub async fn connect_mqtt_broker(
         {
             Ok(_) => break,
             Err(e) if attempt == MAX_RETRIES => {
-                error!("Final connect attempt failed: {:?}", e);
+                error!("[Quectel] Final connect attempt failed: {e:?}");
                 return Err(MqttConnectError::CommandFailed);
             }
             Err(e) => {
-                warn!("Connect attempt failed: {:?} - retrying", e);
+                warn!("[Quectel] Connect attempt failed: {e:?} - retrying");
                 embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
             }
         }
@@ -515,7 +515,7 @@ pub async fn connect_mqtt_broker(
 
     loop {
         if start.elapsed() > RESPONSE_TIMEOUT {
-            error!("MQTT connect timeout");
+            error!("[Quectel] MQTT connect timeout");
             return Err(MqttConnectError::Timeout);
         }
 
@@ -523,17 +523,17 @@ pub async fn connect_mqtt_broker(
 
         match subscriber.try_next_message_pure() {
             Some(Urc::MqttConnect(response)) => {
-                info!("Received MQTT connect response: {:?}", response);
+                info!("[Quectel] Received MQTT connect response: {response:?}");
                 return match response.result {
                     0 => Ok(()),
                     code => {
-                        error!("Modem connection error: {}", code);
+                        error!("[Quectel] Modem connection error: {code}");
                         Err(MqttConnectError::ModemError(code))
                     }
                 };
             }
             Some(other_urc) => {
-                debug!("Ignoring unrelated URC: {:?}", other_urc);
+                debug!("Ignoring unrelated URC: {other_urc:?}");
             }
             None => {
                 trace!("Waiting for MQTT connect response...");
@@ -558,60 +558,60 @@ pub async fn quectel_tx_handler(
         match state {
             State::ResetHardware => {
                 // 0: Reset Hardware
-                info!("Quectel: Reset Hardware");
+                info!("[Quectel] Reset Hardware");
                 reset_modem(&mut pen).await;
                 state = State::DisableEchoMode;
             }
             State::DisableEchoMode => {
-                info!("Quectel: Disable Echo Mode");
+                info!("[Quectel] Disable Echo Mode");
                 if check_result(client.send(&DisableEchoMode).await) {
                     state = State::GetModelId;
                 }
             }
             State::GetModelId => {
-                info!("Quectel: Get Model Id");
+                info!("[Quectel] Get Model Id");
                 if check_result(client.send(&GetModelId).await) {
                     state = State::GetSoftwareVersion;
                 }
             }
             State::GetSoftwareVersion => {
-                info!("Quectel: Get Software Version");
+                info!("[Quectel] Get Software Version");
                 if check_result(client.send(&GetSoftwareVersion).await) {
                     state = State::GetSimCardStatus;
                 }
             }
             State::GetSimCardStatus => {
-                info!("Quectel: Get Sim Card Status");
+                info!("[Quectel] Get Sim Card Status");
                 if check_result(client.send(&GetSimCardStatus).await) {
                     state = State::GetNetworkSignalQuality;
                 }
             }
             State::GetNetworkSignalQuality => {
-                info!("Quectel: Get Network Signal Quality");
+                info!("[Quectel] Get Network Signal Quality");
                 if check_result(client.send(&GetNetworkSignalQuality).await) {
                     state = State::GetNetworkInfo;
                 }
             }
             State::GetNetworkInfo => {
-                info!("Quectel: Get Network Info");
+                info!("[Quectel] Get Network Info");
                 if check_result(client.send(&GetNetworkInfo).await) {
                     state = State::EnableGps;
                 }
             }
             State::EnableGps => {
-                info!("Quectel: Enable GPS");
+                info!("[Quectel] Enable GPS");
                 if check_result(client.send(&EnableGpsFunc).await) {
                     state = State::EnableAssistGps;
                 }
             }
             State::EnableAssistGps => {
-                info!("Quectel: Enable Assist GPS");
+                info!("[Quectel] Enable Assist GPS");
                 if check_result(client.send(&EnableAssistGpsFunc).await) {
                     state = State::SetModemFunctionality;
                 }
             }
             State::SetModemFunctionality => {
-                info!("Quectel: Set Modem Functionality");
+                info!("[Quectel] Set Modem Functionality");
                 if check_result(
                     client
                         .send(&SetUeFunctionality {
@@ -623,7 +623,7 @@ pub async fn quectel_tx_handler(
                 }
             }
             State::UploadMqttCert => {
-                info!("Quectel: Upload Files");
+                info!("[Quectel] Upload Files");
                 let res: bool = upload_mqtt_cert_files(
                     &mut client,
                     urc_channel,
@@ -635,56 +635,57 @@ pub async fn quectel_tx_handler(
                 state = if res {
                     State::CheckNetworkRegistration
                 } else {
-                    error!("File upload failed, resetting hardware");
+                    error!("[Quectel] File upload failed, resetting hardware");
                     State::ErrorConnection
                 };
             }
             State::CheckNetworkRegistration => {
-                info!("Quectel: Check Network Registration");
+                info!("[Quectel] Check Network Registration");
                 let res = check_network_registration(&mut client).await;
-                state = if res {
-                    State::MqttOpenConnection
+                if res {
+                    state = State::MqttOpenConnection;
                 } else {
-                    error!("Network registration failed, resetting hardware");
-                    State::ErrorConnection
-                };
+                    error!("[Quectel] Network registration failed, resetting hardware");
+                    state = State::ErrorConnection;
+                }
             }
             State::MqttOpenConnection => {
-                info!("Opening MQTT connection");
+                info!("[Quectel] Opening MQTT connection");
                 match open_mqtt_connection(&mut client, urc_channel).await {
                     Ok(_) => {
-                        info!("MQTT connection opened successfully");
+                        info!("[Quectel] MQTT connection opened successfully");
                         state = State::MqttConnectBroker;
                     }
                     Err(e) => {
-                        error!("Failed to open MQTT connection: {:?}", e);
+                        error!("[Quectel] Failed to open MQTT connection: {e:?}");
                     }
                 }
             }
             State::MqttConnectBroker => {
-                info!("Connecting to MQTT broker");
+                info!("[Quectel] Connecting to MQTT broker");
                 match connect_mqtt_broker(&mut client, urc_channel).await {
                     Ok(_) => {
-                        info!("MQTT connection established");
+                        info!("[Quectel] MQTT connection established");
                         state = State::MqttPublishData;
                     }
                     Err(e) => {
-                        error!("MQTT connection failed: {:?}", e);
+                        error!("[Quectel] MQTT connection failed: {e:?}");
+                        state = State::ErrorConnection;
                     }
                 }
             }
             State::MqttPublishData => {
-                info!("Quectel: Publishing MQTT Data");
+                info!("[Quectel] Publishing MQTT Data");
                 if handle_publish_mqtt_data(&mut client, MQTT_CLIENT_ID).await {
-                    info!("MQTT data published successfully");
+                    info!("[Quectel] MQTT data published successfully");
                     // Transition to next state or maintain publishing state
                     state = State::MqttPublishData;
                 } else {
-                    error!("MQTT publish failed");
+                    error!("[Quectel] MQTT publish failed");
                 }
             }
             State::ErrorConnection => {
-                error!("System in error state - attempting recovery");
+                error!("[Quectel] System in error state - attempting recovery");
                 embassy_time::Timer::after(embassy_time::Duration::from_secs(5)).await;
                 state = State::ResetHardware;
             }
