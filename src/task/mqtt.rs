@@ -7,8 +7,8 @@ use esp_hal::peripherals::{RSA, SHA};
 use esp_mbedtls::{asynch::Session, Certificates, Mode, Tls, TlsVersion, X509};
 use log::{error, info};
 
-//use crate::net::conn_mgr::ActiveConnection;
-//use crate::net::conn_mgr::ACTIVE_CONNECTION_CHAN;
+//use crate::net::mgr::ActiveConnection;
+//use crate::net::mgr::ACTIVE_CONNECTION_CHAN;
 use crate::net::{dns::DnsBuilder, mqtt::MqttClient};
 
 use crate::cfg::net_cfg::*;
@@ -45,16 +45,11 @@ pub async fn mqtt_handler(
         }
 
         let certificates = Certificates {
-            ca_chain: X509::pem(concat!(include_str!("../../certs/crt.pem"), "\0").as_bytes())
+            ca_chain: X509::pem(concat!(include_str!("../../certs/crt.pem"), "\0").as_bytes()).ok(),
+            certificate: X509::pem(concat!(include_str!("../../certs/dvt.crt"), "\0").as_bytes())
                 .ok(),
-            certificate: X509::pem(
-                concat!(include_str!("../../certs/dvt.crt"), "\0").as_bytes(),
-            )
-            .ok(),
-            private_key: X509::pem(
-                concat!(include_str!("../../certs/dvt.key"), "\0").as_bytes(),
-            )
-            .ok(),
+            private_key: X509::pem(concat!(include_str!("../../certs/dvt.key"), "\0").as_bytes())
+                .ok(),
             password: None,
         };
 
