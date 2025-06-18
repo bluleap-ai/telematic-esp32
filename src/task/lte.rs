@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::net::atcmd::general::*;
 use crate::net::atcmd::response::*;
 use crate::net::atcmd::Urc;
+use crate::task::netmgr::{ConnectionEvent, CONN_EVENT_CHAN};
 
 use crate::cfg::net_cfg::*;
 
@@ -550,6 +551,7 @@ pub async fn quectel_tx_handler(
     urc_channel: &'static UrcChannel<Urc, 128, 3>,
 ) -> ! {
     let mut state: State = State::ResetHardware;
+    let mut is_connected = false;
     let ca_chain = include_str!("../../certs/crt.pem").as_bytes();
     let certificate = include_str!("../../certs/dvt.crt").as_bytes();
     let private_key = include_str!("../../certs/dvt.key").as_bytes();
@@ -643,8 +645,16 @@ pub async fn quectel_tx_handler(
                 info!("[Quectel] Check Network Registration");
                 let res = check_network_registration(&mut client).await;
                 if res {
+                    if !is_connected {
+                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteRegistered);
+                        is_connected = true;
+                    }
                     state = State::MqttOpenConnection;
                 } else {
+                    if is_connected {
+                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteUnregistered);
+                        is_connected = false;
+                    }
                     error!("[Quectel] Network registration failed, resetting hardware");
                     state = State::ErrorConnection;
                 }
@@ -666,10 +676,12 @@ pub async fn quectel_tx_handler(
                 match connect_mqtt_broker(&mut client, urc_channel).await {
                     Ok(_) => {
                         info!("[Quectel] MQTT connection established");
+                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected);
                         state = State::MqttPublishData;
                     }
                     Err(e) => {
                         error!("[Quectel] MQTT connection failed: {e:?}");
+                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
                         state = State::ErrorConnection;
                     }
                 }
@@ -685,6 +697,10 @@ pub async fn quectel_tx_handler(
                 }
             }
             State::ErrorConnection => {
+                if is_connected {
+                    let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
+                    is_connected = false;
+                }
                 error!("[Quectel] System in error state - attempting recovery");
                 embassy_time::Timer::after(embassy_time::Duration::from_secs(5)).await;
                 state = State::ResetHardware;

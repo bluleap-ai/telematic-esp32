@@ -57,18 +57,18 @@ const SWITCH_DEBOUNCE_TIME: Duration = Duration::from_secs(10);
 const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 #[embassy_executor::task]
-pub async fn connection_manager_task(spawner: Spawner) -> ! {
+pub async fn net_manager_task(spawner: Spawner) -> ! {
     info!("[NetMgr] Connection manager started");
 
     let mut status = ConnectionStatus::default();
     let event_receiver = CONN_EVENT_CHAN.receiver();
     let status_sender = CONN_STATUS_CHAN.sender();
     let switch_receiver = SWITCH_REQUEST_CHAN.receiver();
-    let active_connection_sender = ACTIVE_CONNECTION_CHAN.sender();
+    let active_net_sender = ACTIVE_CONNECTION_CHAN.sender();
 
     // Start health monitoring tasks
     let health_sender = CONN_EVENT_CHAN.sender();
-    spawner.spawn(connection_health_monitor(health_sender)).ok();
+    spawner.spawn(net_health_monitor(health_sender)).ok();
     spawner.spawn(lte_health_monitor(health_sender)).ok();
 
     loop {
@@ -86,14 +86,14 @@ pub async fn connection_manager_task(spawner: Spawner) -> ! {
                 ConnectionEvent::WiFiConnected => {
                     status.wifi_available = true;
                     if should_prefer_wifi(&status) {
-                        perform_connection_switch(&mut status, ActiveConnection::WiFi).await;
+                        perform_net_switch(&mut status, ActiveConnection::WiFi).await;
                     }
                 }
                 ConnectionEvent::WiFiDisconnected => {
                     status.wifi_available = false;
                     if status.active == ActiveConnection::WiFi {
                         if status.lte_available {
-                            perform_connection_switch(&mut status, ActiveConnection::Lte).await;
+                            perform_net_switch(&mut status, ActiveConnection::Lte).await;
                         } else {
                             status.active = ActiveConnection::None;
                         }
@@ -102,14 +102,14 @@ pub async fn connection_manager_task(spawner: Spawner) -> ! {
                 ConnectionEvent::LteConnected | ConnectionEvent::LteRegistered => {
                     status.lte_available = true;
                     if status.active == ActiveConnection::None && !status.wifi_available {
-                        perform_connection_switch(&mut status, ActiveConnection::Lte).await;
+                        perform_net_switch(&mut status, ActiveConnection::Lte).await;
                     }
                 }
                 ConnectionEvent::LteDisconnected | ConnectionEvent::LteUnregistered => {
                     status.lte_available = false;
                     if status.active == ActiveConnection::Lte {
                         if status.wifi_available {
-                            perform_connection_switch(&mut status, ActiveConnection::WiFi).await;
+                            perform_net_switch(&mut status, ActiveConnection::WiFi).await;
                         } else {
                             status.active = ActiveConnection::None;
                         }
@@ -119,15 +119,15 @@ pub async fn connection_manager_task(spawner: Spawner) -> ! {
 
             // Notify others of status change
             let _ = status_sender.try_send(status);
-            let _ = active_connection_sender.try_send(status.active);
+            let _ = active_net_sender.try_send(status.active);
         }
 
         // Handle manual switch requests
         if let Ok(requested_connection) = switch_receiver.try_receive() {
             if can_switch_to(&status, requested_connection) {
-                perform_connection_switch(&mut status, requested_connection).await;
+                perform_net_switch(&mut status, requested_connection).await;
                 let _ = status_sender.try_send(status);
-                let _ = active_connection_sender.try_send(status.active);
+                let _ = active_net_sender.try_send(status.active);
             } else {
                 warn!("[NetMgr] Cannot switch to {requested_connection:?} - not available");
             }
@@ -136,7 +136,7 @@ pub async fn connection_manager_task(spawner: Spawner) -> ! {
 }
 
 #[embassy_executor::task]
-async fn connection_health_monitor(
+async fn net_health_monitor(
     event_sender: Sender<'static, CriticalSectionRawMutex, ConnectionEvent, 16>,
 ) -> ! {
     info!("[NetMgr] Health monitor started");
@@ -193,7 +193,7 @@ fn is_recently_switched(status: &ConnectionStatus) -> bool {
     }
 }
 
-async fn perform_connection_switch(status: &mut ConnectionStatus, target: ActiveConnection) {
+async fn perform_net_switch(status: &mut ConnectionStatus, target: ActiveConnection) {
     if status.active == target {
         return;
     }

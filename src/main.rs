@@ -9,10 +9,10 @@ mod util;
 
 // Import the necessary modules
 use crate::net::atcmd::Urc;
-
 use task::can::*;
 use task::lte::*;
 use task::mqtt::*;
+use task::netmgr::net_manager_task;
 #[cfg(feature = "ota")]
 use task::ota::ota_handler;
 use task::wifi::*;
@@ -167,9 +167,11 @@ async fn main(spawner: Spawner) -> ! {
             &URC_CHANNEL,
         ))
         .ok();
+    spawner.spawn(net_manager_task(spawner)).ok();
+
     #[cfg(feature = "ota")]
-    //wait until wifi connected
     {
+        // Wait until WiFi is connected before starting OTA
         loop {
             if stack.is_link_up() {
                 break;
