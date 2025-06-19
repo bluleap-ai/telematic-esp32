@@ -50,6 +50,7 @@ jobs:
       # name: Clippy with ota
       # run: cargo clippy --target riscv32imac-unknown-none-elf --features ota -- -D warnings
       # continue-on-error: false
+
 #  build:
 #    name: Build Firmware
 #    runs-on: ubuntu-latest
