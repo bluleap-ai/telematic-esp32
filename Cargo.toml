@@ -1,171 +1,106 @@
-on:
-  push:
-    branches: ["**"]
-    tags: ["v*"]
-  pull_request:
-    branches: ["**"]
+[package]
+name = "telematics-control-unit"
+version = "0.1.0"
+authors = ["tuemb <nvtu96@gmail.com> , tri nguyen <trongtribk06@gmail.com>"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+default-run = "telematics-control-unit"
+# Rust edition
+resolver = "2"
 
-name: CI
 
-jobs:
-  check:
-    name: Code Quality Checks
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+[dependencies]
+# Core dependencies with ESP32C6 features
+esp-backtrace = { version = "0.15.0", features = [
+    "esp32c6",
+    "exception-handler",
+    "panic-handler",
+    "println",
+] }
+esp-hal = { version = "0.23.0", features = ["esp32c6", "log"], optional = true }
+esp-hal-embassy = { version = "0.6.0", features = ["esp32c6"], optional = true }
+esp-alloc = { version = "0.6.0" }
+esp-storage = { version = "0.4.0", features = ["esp32c6"], optional = true }
 
-      - name: Install Rustup
-        run: |
-          sudo apt-get update
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          echo "export PATH=\$HOME/.cargo/bin:\$PATH:/usr/bin" >> $GITHUB_ENV
-        shell: bash
+# Embassy framework
+embassy-executor = { version = "0.7.0", features = ["task-arena-size-131072"] }
+embassy-net = { version = "0.6.0", features = [
+    "tcp",
+    "udp",
+    "dhcpv4",
+    "medium-ethernet",
+] }
+embassy-time = "0.4.0"
+embassy-sync = "0.6.1"
+embassy-futures = "0.1.1"
+# ESP32 specific
+esp-println = { version = "0.13.0", features = ["esp32c6", "log"] }
+esp-wifi = { version = "0.12.0", features = ["esp32c6", "wifi"] }
 
-      - name: Rust Cache
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+# OTA
+esp32-mender-client = { git = "https://github.com/virust-ai/esp32-mender-client", branch = "main", features = [
+    "esp32c6",
+] }
 
-      - name: Setup Rust Environment
-        run: |
-          rustup component add rustfmt
-          rustup component add clippy
-          rustup target add riscv32imac-unknown-none-elf
-        shell: bash
+# Other dependencies
+embedded-can = "0.4.1"
+log = { version = "0.4.16" }
+esp-mbedtls = { git = "https://github.com/TuEmb/esp-mbedtls.git", branch = "esp32c6_support", features = [
+    "esp32c6",
+] }
+atat = { git = "https://github.com/TuEmb/atat.git", rev = "67eb38b3b2cdbd1a5f68f536517a8f24d3fcba01" }
+static_cell = { version = "2.1.0", features = ["nightly"] }
+heapless = "0.8.0"
+embedded-io = "0.6.1"
+embedded-storage = "0.3.1"
+mqttrust = "0.6.0"
+smoltcp = { version = "0.12.0", default-features = false, features = [
+    "proto-ipv4",
+    "socket-tcp",
+    "socket-icmp",
+    "socket-udp",
+    "medium-ethernet",
+    "proto-dhcpv4",
+    "socket-raw",
+    "socket-dhcpv4",
+] }
 
-      - name: Rustfmt
-        run: cargo fmt --all -- --check
-        continue-on-error: true
+# Use serde with no_std compatibility
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde-json-core = { version = "0.6.0", default-features = false }
 
-      - name: Clippy Linting
-        run: cargo clippy --target riscv32imac-unknown-none-elf --features default -- -D warnings
-        continue-on-error: false
+[features]
+default = [
+    "dep:esp-hal",
+    "dep:esp-storage",
+    "dep:esp-hal-embassy",
+    "esp-hal/esp32c6",
+    "esp-storage/esp32c6",
+    "esp-hal-embassy/esp32c6",
+]
+ota = []
+wdg = []
 
-      # name: Clippy with ota
-      # run: cargo clippy --target riscv32imac-unknown-none-elf --features ota -- -D warnings
-      # continue-on-error: false
-#  build:
-#    name: Build Firmware
-#    runs-on: ubuntu-latest
-#    needs: check
-#    steps:
-#      - name: Checkout code
-#        uses: actions/checkout@v4
-#
-#     - name: Install Rustup
-#       run: |
-#         sudo apt-get update
-#         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-#         echo "export PATH=\$HOME/.cargo/bin:\$PATH:/usr/bin" >> $GITHUB_ENV
-#       shell: bash
-#
-#     - name: Rust Cache
-#       uses: actions/cache@v3
-#       with:
-#         path: |
-#           ~/.cargo/registry
-#           ~/.cargo/git
-#           target
-#         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-#         restore-keys: ${{ runner.os }}-cargo-
-#
-#     - name: Setup Rust Environment
-#       run: |
-#         rustup target add riscv32imc-unknown-none-elf
-#         rustup target add riscv32imac-unknown-none-elf
-#         sudo apt-get install build-essential
-#         sudo apt-get install -y python3 python3-pip
-#         pip3 install esptool
-#         cargo update
-#       shell: bash
-#
-#     - name: Build default
-#       run: cargo build --release --target riscv32imac-unknown-none-elf --features default
-#
-#     - name: Convert ELF to BIN and HEX (esp32c6)
-#       run: |
-#         # Get the name of the ELF file
-#         ELF_FILE=$(find target/riscv32imac-unknown-none-elf/release -name "*.elf" | head -n 1)
-#         BASENAME=$(basename "$ELF_FILE" .elf)
-#         OUTPUT_DIR="firmware-output/esp32c6"
-#         mkdir -p "$OUTPUT_DIR"
-#
-#         # Create BIN file
-#         esptool.py --chip esp32c6 elf2image --output "$OUTPUT_DIR/$BASENAME.bin" "$ELF_FILE"
-#
-#         # Create HEX file
-#         riscv32-elf-objcopy -O ihex "$ELF_FILE" "$OUTPUT_DIR/$BASENAME.hex" || \
-#         riscv32-unknown-elf-objcopy -O ihex "$ELF_FILE" "$OUTPUT_DIR/$BASENAME.hex" || \
-#         echo "Warning: Could not create HEX file, objcopy not available"
-#
-#         # Copy original ELF for completeness
-#         cp "$ELF_FILE" "$OUTPUT_DIR/"
-#       shell: bash
-#
-#     - name: Upload artifacts
-#       uses: actions/upload-artifact@v3
-#       with:
-#         name: firmware-binaries
-#         path: firmware-output
-#         retention-days: 7
-#  test:
-#    name: Run Tests
-#    runs-on: ubuntu-latest
-#    needs: check
-#    steps:
-#      - name: Checkout code
-#        uses: actions/checkout@v4
-#
-#      - name: Install Rustup
-#        run: |
-#          sudo apt-get update
-#          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-#          echo "export PATH=\$HOME/.cargo/bin:\$PATH:/usr/bin" >> $GITHUB_ENV
-#        shell: bash
-#
-#      - name: Rust Cache
-#        uses: actions/cache@v3
-#        with:
-#          path: |
-#            ~/.cargo/registry
-#            ~/.cargo/git
-#            target
-#          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-#          restore-keys: ${{ runner.os }}-cargo-
-#
-#      - name: Run tests
-#        run: cargo test --workspace
-#
-#  release:
-#    name: Create Release
-#    runs-on: ubuntu-latest
-#    needs: [build, test]
-#    if: startsWith(github.ref, 'refs/tags/v')
-#    steps:
-#      - name: Checkout code
-#        uses: actions/checkout@v4
-#
-#      - name: Download artifacts
-#        uses: actions/download-artifact@v3
-#        with:
-#          name: firmware-binaries
-#          path: release-binaries
-#
-#      - name: Create Release
-#        id: create_release
-#        uses: softprops/action-gh-release@v1
-#        with:
-#          name: Release ${{ github.ref_name }}
-#          draft: false
-#          prerelease: false
-#          generate_release_notes: true
-#          files: |
-#            release-binaries/**/*.bin
-#            release-binaries/**/*.hex
-#            release-binaries/**/*.elf
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1        # LLVM can perform better optimizations using a single thread
+debug = 2
+debug-assertions = false
+incremental = false
+lto = "fat"
+opt-level = "s"
+overflow-checks = false
+
+# Test binaries
+[[bin]]
+name = "test_ex_flash"
+path = "tests/src/bin/test_ex_flash.rs"
+
+
+[[bin]]
+name = "test_fs"
+path = "tests/src/bin/test_fs.rs"
