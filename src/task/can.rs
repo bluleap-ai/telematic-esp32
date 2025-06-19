@@ -18,7 +18,7 @@ pub async fn can_receiver(
     mut rx: TwaiRx<'static, esp_hal::Async>,
     channel: &'static TwaiOutbox,
 ) -> ! {
-    info!("Hello Can Rx Task !!\r");
+    info!("[CAN] Can rx task started\r");
     loop {
         let frame = rx.receive_async().await;
 
@@ -45,7 +45,7 @@ pub async fn can_receiver(
                 }
             }
             Err(e) => {
-                error!("TWAIT Received error: {:?}\r", e);
+                error!("TWAIT Received error: {e:?}\r");
             }
         }
     }
