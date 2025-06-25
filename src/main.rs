@@ -146,8 +146,7 @@ async fn main(spawner: Spawner) -> ! {
     let can = twai_config.start();
     static CHANNEL: StaticCell<TwaiOutbox> = StaticCell::new();
     let channel = &*CHANNEL.init(Channel::new());
-    let (can_rx, _can_tx) = can.split();
-
+    let (can_rx, can_tx) = can.split();
     spawner.spawn(can_receiver(can_rx, channel)).ok();
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(runner)).ok();
