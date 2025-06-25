@@ -7,3 +7,6 @@ log.txt
 cert/crt.pem
 cert/dvt.crt
 cert/dvt.key
+cert/ca.crt
+cert/dvt.crt
+cert/dvt.key
