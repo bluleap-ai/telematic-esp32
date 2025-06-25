@@ -14,12 +14,10 @@ use esp_println::print;
 use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
 
+use crate::cfg::net_cfg::*;
 use crate::svc::atcmd::general::*;
 use crate::svc::atcmd::response::*;
 use crate::svc::atcmd::Urc;
-
-use crate::cfg::net_cfg::*;
-
 use crate::util::time::utc_date_to_unix_timestamp;
 
 const REGISTERED_HOME: u8 = 1;
@@ -156,127 +154,78 @@ pub async fn upload_mqtt_cert_files(
     certificate: &[u8],
     private_key: &[u8],
 ) -> bool {
-    let mut raw_data = heapless::Vec::<u8, 4096>::new();
+    let mut raw_data = heapless::Vec::<u8, 5120>::new();
     raw_data.clear();
     let mut subscriber = urc_channel.subscribe().unwrap();
+    // List existing files
     let _ = client.send(&FileList).await.unwrap();
     let now = embassy_time::Instant::now();
-    loop {
+    while now.elapsed().as_secs() < 10 {
         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
         match subscriber.try_next_message_pure() {
-            Some(Urc::ListFile(file)) => {
-                log::info!("File: {:?}", file);
-            }
-            Some(e) => {
-                error!("Unknown URC {:?}", e);
-            }
-            None => {
-                info!("Waiting for response...");
-            }
-        }
-        if now.elapsed().as_secs() > 10 {
-            break;
+            Some(Urc::ListFile(file)) => log::info!("File: {:?}", file),
+            Some(e) => error!("Unknown URC {:?}", e),
+            None => info!("Waiting for response..."),
         }
     }
-    info!("Quectel: remove CA_CRT path");
-    let _ = client
-        .send(&FileDel {
-            name: heapless::String::from_str("crt.pem").unwrap(),
-        })
-        .await;
-    info!("Quectel: remove CLIENT_CRT path");
-    let _ = client
-        .send(&FileDel {
-            name: heapless::String::from_str("dvt.crt").unwrap(),
-        })
-        .await;
-    info!("Quectel: remove CLIENT_KEY path");
-    let _ = client
-        .send(&FileDel {
-            name: heapless::String::from_str("dvt.key").unwrap(),
-        })
-        .await;
-    // Upload CA cert
-    info!("Quectel: Upload MQTT certs to quectel");
-    let _ = raw_data.extend_from_slice(&ca_chain[0..1024]);
-    let _ = client
-        .send(&FileUpl {
-            name: heapless::String::from_str("crt.pem").unwrap(),
-            size: 2574,
-        })
-        .await;
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 1024,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&ca_chain[1024..2048]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 1024,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&ca_chain[2048..]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 526,
-        })
-        .await;
-    embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
-    // Upload client cert
-    let _ = client
-        .send(&FileUpl {
-            name: heapless::String::from_str("dvt.crt").unwrap(),
-            size: 1268,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&certificate[0..1024]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 1024,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&certificate[1024..]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 244,
-        })
-        .await;
-    embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
-    // Upload client key
-    let _ = client
-        .send(&FileUpl {
-            name: heapless::String::from_str("dvt.key").unwrap(),
-            size: 1678,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&private_key[0..1024]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 1024,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&private_key[1024..]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 654,
-        })
-        .await;
 
-    info!("Quectel: set MQTTS configuration");
+    // Remove old certs
+    for name in ["ca.crt", "dvt.crt", "dvt.key"] {
+        let _ = client
+            .send(&FileDel {
+                name: heapless::String::from_str(name).unwrap(),
+            })
+            .await;
+        info!("Deleted old {}", name);
+    }
+
+    // Upload helper
+    async fn upload_file(
+        client: &mut Client<'static, UartTx<'static, Async>, 1024>,
+        name: &str,
+        content: &[u8],
+        raw_data: &mut heapless::Vec<u8, 5120>,
+    ) {
+        let _ = client
+            .send(&FileUpl {
+                name: heapless::String::from_str(name).unwrap(),
+                size: content.len() as u32,
+            })
+            .await;
+
+        let mut offset = 0;
+        while offset < content.len() {
+            // vẫn giới hạn chunk nhỏ
+            let chunk_len = (content.len() - offset).min(1024);
+            raw_data.clear();
+            raw_data
+                .extend_from_slice(&content[offset..offset + chunk_len])
+                .unwrap();
+
+            let _ = client
+                .send(&SendRawData {
+                    raw_data: raw_data.clone(),
+                    len: chunk_len,
+                })
+                .await;
+            offset += chunk_len;
+        }
+
+        embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+    }
+
+    // Upload certs
+    info!("Uploading CA cert...");
+    upload_file(client, "ca.crt", ca_chain, &mut raw_data).await;
+
+    info!("Uploading client cert...");
+    upload_file(client, "dvt.crt", certificate, &mut raw_data).await;
+
+    info!("Uploading client key...");
+    upload_file(client, "dvt.key", private_key, &mut raw_data).await;
+
+    // Configure MQTTS
+    info!("Configuring MQTT over TLS...");
     let _ = client
         .send(&MqttConfig {
             name: heapless::String::from_str("recv/mode").unwrap(),
@@ -293,27 +242,21 @@ pub async fn upload_mqtt_cert_files(
             param_3: Some(2),
         })
         .await;
-    let _ = client
-        .send(&SslConfigCert {
-            name: heapless::String::from_str("cacert").unwrap(),
-            context_id: 2,
-            cert_path: Some(heapless::String::from_str("UFS:crt.pem").unwrap()),
-        })
-        .await;
-    let _ = client
-        .send(&SslConfigCert {
-            name: heapless::String::from_str("clientcert").unwrap(),
-            context_id: 2,
-            cert_path: Some(heapless::String::from_str("UFS:dvt.crt").unwrap()),
-        })
-        .await;
-    let _ = client
-        .send(&SslConfigCert {
-            name: heapless::String::from_str("clientkey").unwrap(),
-            context_id: 2,
-            cert_path: Some(heapless::String::from_str("UFS:dvt.key").unwrap()),
-        })
-        .await;
+
+    for (cfg_name, path) in [
+        ("cacert", "UFS:ca.crt"),
+        ("clientcert", "UFS:dvt.crt"),
+        ("clientkey", "UFS:dvt.key"),
+    ] {
+        let _ = client
+            .send(&SslConfigCert {
+                name: heapless::String::from_str(cfg_name).unwrap(),
+                context_id: 2,
+                cert_path: Some(heapless::String::from_str(path).unwrap()),
+            })
+            .await;
+    }
+
     let _ = client
         .send(&SslConfigOther {
             name: heapless::String::from_str("seclevel").unwrap(),
@@ -472,16 +415,18 @@ pub async fn connect_mqtt_broker(
 ) -> Result<(), MqttConnectError> {
     const MAX_RETRIES: usize = 3;
     const RESPONSE_TIMEOUT: embassy_time::Duration = embassy_time::Duration::from_secs(30);
-    const CLIENT_ID: &str = "telematics-control-unit";
-
+    const CLIENT_ID: &str = "mqttx_48c00b22";
+    const MQTT_PASS: &str = "f57f9bf3-07b3-4ba5-ae1f-bf6f579e346d";
     // Create credentials with proper error handling
     let username = heapless::String::<64>::from_str(MQTT_USR_NAME)
         .map_err(|_| MqttConnectError::StringConversion)?;
-    let password = heapless::String::<64>::from_str(MQTT_USR_NAME) // Note: Same as username - is this intentional?
+    info!("1");
+    let password = heapless::String::<64>::from_str("f57f9bf3-07b3-4ba5-ae1f-bf6f579e346d") // Note: Same as username - is this intentional?
         .map_err(|_| MqttConnectError::StringConversion)?;
+    info!("2");
     let client_id = heapless::String::<23>::from_str(CLIENT_ID)
         .map_err(|_| MqttConnectError::StringConversion)?;
-
+    info!("3");
     // Send connect command with retries
     for attempt in 1..=MAX_RETRIES {
         info!("MQTT connect attempt {}/{}", attempt, MAX_RETRIES);
@@ -550,7 +495,7 @@ pub async fn quectel_tx_handler(
     urc_channel: &'static UrcChannel<Urc, 128, 3>,
 ) -> ! {
     let mut state: State = State::ResetHardware;
-    let ca_chain = include_str!("../../cert/crt.pem").as_bytes();
+    let ca_chain = include_str!("../../cert/ca.crt").as_bytes();
     let certificate = include_str!("../../cert/dvt.crt").as_bytes();
     let private_key = include_str!("../../cert/dvt.key").as_bytes();
 

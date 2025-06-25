@@ -52,7 +52,7 @@ pub async fn mqtt_handler(
         let mut socket = TcpSocket::new(*stack, &mut rx_buffer, &mut tx_buffer);
         socket.connect(remote_endpoint).await.unwrap();
         let certificates = Certificates {
-            ca_chain: X509::pem(concat!(include_str!("../../cert/crt.pem"), "\0").as_bytes()).ok(),
+            ca_chain: X509::pem(concat!(include_str!("../../cert/ca.crt"), "\0").as_bytes()).ok(),
             certificate: X509::pem(concat!(include_str!("../../cert/dvt.crt"), "\0").as_bytes())
                 .ok(),
             private_key: X509::pem(concat!(include_str!("../../cert/dvt.key"), "\0").as_bytes())
@@ -96,7 +96,7 @@ pub async fn mqtt_handler(
                 .unwrap();
                 writeln!(
                     &mut mqtt_topic,
-                    "channels/{}/messages/client/can",
+                    "m/4fd2230f-e5b1-4fe9-ad30-4c19832e8cef/c/{}",
                     MQTT_CLIENT_ID
                 )
                 .unwrap();
