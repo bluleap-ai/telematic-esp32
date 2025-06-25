@@ -461,7 +461,7 @@ pub struct MqttConnect {
 /// AT+QMTPUBEX Publish an MQTT Message with Extended Parameters
 ///
 /// The command responds with OK. We need to get the response from the URC +QMTPUB.
-#[derive(Clone, AtatCmd)]
+#[derive(Clone, AtatCmd, Debug)]
 #[at_cmd("+QMTPUB", NoResponse, timeout_ms = 300)]
 pub struct MqttPublishExtended {
     /// <tcpconnectID>
@@ -648,7 +648,7 @@ pub struct FileList;
 /// Send raw data to UART
 #[derive(Clone)]
 pub struct SendRawData {
-    pub raw_data: heapless::Vec<u8, 4096>,
+    pub raw_data: heapless::Vec<u8, 5120>,
     pub len: usize,
 }
 
