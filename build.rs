@@ -38,7 +38,7 @@ pub const MQTT_SERVER_NAME: &str = "{server_name}";
 pub const MQTT_SERVER_PORT: u16 = {server_port};
 pub const MQTT_CLIENT_ID: &str = "{client_id}";
 pub const MQTT_USR_NAME: &str = "{usr_name}";
-pub const MQTT_USR_PASS: [u8; 9] = *b"{usr_pass}";
+pub const MQTT_USR_PASS: [u8; 36] = *b"{usr_pass}";
 "#
     );
 
