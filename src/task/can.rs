@@ -2,9 +2,10 @@ use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel};
 use embedded_can::{Frame, Id};
 use esp_hal::twai::TwaiRx;
 use log::{error, info};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
 #[allow(dead_code)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CanFrame {
     pub id: u32,
     pub len: u8,
