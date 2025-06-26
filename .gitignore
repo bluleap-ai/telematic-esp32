@@ -14,3 +14,5 @@
 **/crt.pem
 **/dvt.crt
 **/dvt.key
+**/ca.crt
+

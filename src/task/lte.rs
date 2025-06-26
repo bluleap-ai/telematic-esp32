@@ -69,7 +69,8 @@ async fn handle_publish_mqtt_data(
 
     writeln!(
         &mut mqtt_topic,
-        "channels/{mqtt_client_id}/messages/client/trip"
+        "m/4fd2230f-e5b1-4fe9-ad30-4c19832e8cef/c/{}",
+        mqtt_client_id
     )
     .unwrap();
 
@@ -422,7 +423,7 @@ pub async fn connect_mqtt_broker(
     // Create credentials with proper error handling
     let username = heapless::String::<64>::from_str(MQTT_USR_NAME)
         .map_err(|_| MqttConnectError::StringConversion)?;
-    let password = heapless::String::<64>::from_str(MQTT_USR_NAME) // Note: Same as username - is this intentional?
+    let password = heapless::String::<64>::from_str("f57f9bf3-07b3-4ba5-ae1f-bf6f579e346d") // Note: Same as username - is this intentional?
         .map_err(|_| MqttConnectError::StringConversion)?;
     let client_id = heapless::String::<23>::from_str(CLIENT_ID)
         .map_err(|_| MqttConnectError::StringConversion)?;
