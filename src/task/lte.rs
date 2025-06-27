@@ -59,6 +59,7 @@ enum State {
     MqttConnectBroker,
     MqttPublishData,
     ErrorConnection,
+    GetGPSData,
     //Connected,
     //Disconnected,
 }
@@ -759,13 +760,27 @@ pub async fn quectel_tx_handler(
                     Ok(_) => {
                         info!("[Quectel] MQTT connection established");
                         let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected);
-                        state = State::MqttPublishData;
+                        state = State::GetGPSData;
                     }
                     Err(e) => {
                         error!("[Quectel] MQTT connection failed: {e:?}");
                         let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
                         state = State::ErrorConnection;
                     }
+                }
+            }
+            State::GetGPSData => {
+                info!("[Quectel] Retrieving GPS Data");
+                if check_result(client.send(&RetrieveGpsRmc).await) {
+                    // check LTE or WIFI here
+                    if 1 {
+                        state = State::MqttPublishData;
+                    } else {
+                        continue;
+                    }
+                } else {
+                    error!("[Quectel] Failed to retrieve GPS data");
+                    state = State::ErrorConnection;
                 }
             }
             State::MqttPublishData => {
