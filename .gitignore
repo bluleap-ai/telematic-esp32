@@ -11,8 +11,7 @@
 **/net_cfg.rs
 
 # Ignore certificate files in certs directory
-**/crt.pem
-**/dvt.crt
-**/dvt.key
-**/ca.crt
+cert/dvt.crt
+cert/dvt.key
+cert/ca.crt
 
