@@ -692,8 +692,45 @@ pub async fn quectel_tx_handler(
             State::EnableAssistGps => {
                 info!("[Quectel] Enable Assist GPS");
                 if check_result(client.send(&EnableAssistGpsFunc).await) {
-                    state = State::SetModemFunctionality;
+                    state = State::GetGPSData;
                 }
+            }
+            State::GetGPSData => {
+                info!("[Quectel] Retrieving GPS Data");
+
+                let trip_result = client.send(&RetrieveGpsRmc).await;
+
+                let trip_success = match trip_result {
+                    Ok(res) => {
+                        info!("[LTE] GPS RMC data received: {res:?}");
+
+                        let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
+                        let mut device_id = heapless::String::new();
+                        let mut trip_id = heapless::String::new();
+                        write!(&mut trip_id, "{MQTT_CLIENT_ID}").unwrap();
+                        write!(&mut device_id, "{MQTT_CLIENT_ID}").unwrap();
+
+                        let trip_data = TripData {
+                            device_id,
+                            trip_id,
+                            latitude: ((res.latitude as u64 / 100) as f64)
+                                + ((res.latitude % 100.0f64) / 60.0f64),
+                            longitude: ((res.longitude as u64 / 100) as f64)
+                                + ((res.longitude % 100.0f64) / 60.0f64),
+                            timestamp,
+                        };
+
+                        if gps_channel.try_send(trip_data.clone()).is_err() {
+                            error!("[Quectel] Failed to send TripData to channel");
+                        } else {
+                            info!("[Quectel] GPS data sent to channel: {:?}", trip_data);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("[Quectel] Failed to retrieve GPS data: {e:?}");
+                        state = State::ResetHardware;
+                    }
+                };
             }
             State::SetModemFunctionality => {
                 info!("[Quectel] Set Modem Functionality");
@@ -760,7 +797,7 @@ pub async fn quectel_tx_handler(
                     Ok(_) => {
                         info!("[Quectel] MQTT connection established");
                         let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected);
-                        state = State::GetGPSData;
+                        state = State::MqttPublishData;
                     }
                     Err(e) => {
                         error!("[Quectel] MQTT connection failed: {e:?}");
@@ -769,20 +806,7 @@ pub async fn quectel_tx_handler(
                     }
                 }
             }
-            State::GetGPSData => {
-                info!("[Quectel] Retrieving GPS Data");
-                if check_result(client.send(&RetrieveGpsRmc).await) {
-                    // check LTE or WIFI here
-                    if 1 {
-                        state = State::MqttPublishData;
-                    } else {
-                        continue;
-                    }
-                } else {
-                    error!("[Quectel] Failed to retrieve GPS data");
-                    state = State::ErrorConnection;
-                }
-            }
+
             State::MqttPublishData => {
                 info!("[Quectel] Publishing MQTT Data");
                 if handle_publish_mqtt_data(&mut client, MQTT_CLIENT_ID, gps_channel, channel).await

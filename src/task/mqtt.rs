@@ -30,7 +30,7 @@ pub async fn mqtt_handler(
 ) {
     // No need to switch stacks, just use stack
     loop {
-        info!("internet ConnectionEvent :?", ConnectionEvent)
+        // info!("internet ConnectionEvent :?", ConnectionEvent);
         // Ensure the stack is connected
         if !stack.is_link_up() {
             Timer::after(Duration::from_millis(500)).await;

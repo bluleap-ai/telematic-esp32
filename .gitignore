@@ -14,3 +14,7 @@
 **/crt.pem
 **/dvt.crt
 **/dvt.key
+
+certs/
+
+.cargo/config.toml
