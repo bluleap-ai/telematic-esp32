@@ -101,8 +101,7 @@ pub async fn mqtt_handler(
                 .unwrap();
                 writeln!(
                     &mut mqtt_topic,
-                    "m/4fd2230f-e5b1-4fe9-ad30-4c19832e8cef/c/{}",
-                    MQTT_CLIENT_ID
+                    "m/4fd2230f-e5b1-4fe9-ad30-4c19832e8cef/c/{MQTT_CLIENT_ID}"
                 )
                 .unwrap();
                 if let Err(e) = mqtt_client

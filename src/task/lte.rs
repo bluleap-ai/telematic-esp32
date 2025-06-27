@@ -5,7 +5,6 @@ use atat::{
     AtatIngress, DefaultDigester, Ingress, UrcChannel,
 };
 
-use embassy_executor::raw;
 use esp_hal::{
     gpio::Output,
     uart::{UartRx, UartTx},
@@ -70,8 +69,7 @@ async fn handle_publish_mqtt_data(
 
     writeln!(
         &mut mqtt_topic,
-        "m/4fd2230f-e5b1-4fe9-ad30-4c19832e8cef/c/{}",
-        mqtt_client_id
+        "m/4fd2230f-e5b1-4fe9-ad30-4c19832e8cef/c/{mqtt_client_id}"
     )
     .unwrap();
 
@@ -167,8 +165,8 @@ pub async fn upload_mqtt_cert_files(
     while now.elapsed().as_secs() < 10 {
         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
         match subscriber.try_next_message_pure() {
-            Some(Urc::ListFile(file)) => log::info!("File: {:?}", file),
-            Some(e) => error!("Unknown URC {:?}", e),
+            Some(Urc::ListFile(file)) => log::info!("File: {file:?}"),
+            Some(e) => error!("Unknown URC {e:?}"),
             None => info!("Waiting for response..."),
         }
     }
@@ -180,7 +178,7 @@ pub async fn upload_mqtt_cert_files(
                 name: heapless::String::from_str(name).unwrap(),
             })
             .await;
-        info!("Deleted old {}", name);
+        info!("Deleted old {name}");
     }
 
     // Upload helper
@@ -194,7 +192,7 @@ pub async fn upload_mqtt_cert_files(
         let name_str = match heapless::String::from_str(name) {
             Ok(s) => s,
             Err(_) => {
-                error!("❌  Heapless string overflow for file name: {}", name);
+                error!("❌  Heapless string overflow for file name: {name}");
                 return false;
             }
         };
@@ -206,7 +204,7 @@ pub async fn upload_mqtt_cert_files(
             })
             .await
         {
-            error!("❌  FileUpl command failed: {:?}", e);
+            error!("❌  FileUpl command failed: {e:?}");
             return false;
         }
         //Uploading data payload in 1 Kib of chunks
@@ -220,7 +218,7 @@ pub async fn upload_mqtt_cert_files(
             if let Err(_e) = client
                 .send(&SendRawData {
                     raw_data: raw_data.clone(),
-                    len: chunk.len() as usize,
+                    len: chunk.len(),
                 })
                 .await
             {
