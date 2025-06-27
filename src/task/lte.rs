@@ -5,6 +5,7 @@ use atat::{
     AtatIngress, DefaultDigester, Ingress, UrcChannel,
 };
 
+use embassy_executor::raw;
 use esp_hal::{
     gpio::Output,
     uart::{UartRx, UartTx},
@@ -188,33 +189,48 @@ pub async fn upload_mqtt_cert_files(
         name: &str,
         content: &[u8],
         raw_data: &mut heapless::Vec<u8, 4096>,
-    ) {
-        let _ = client
+    ) -> bool {
+        //Sending file upload command to notify the modem about the file to be uploaded
+        let name_str = match heapless::String::from_str(name) {
+            Ok(s) => s,
+            Err(_) => {
+                error!("❌  Heapless string overflow for file name: {}", name);
+                return false;
+            }
+        };
+        //Notify the modem about the file to be uploaded
+        if let Err(e) = client
             .send(&FileUpl {
-                name: heapless::String::from_str(name).unwrap(),
+                name: name_str,
                 size: content.len() as u32,
             })
-            .await;
-
-        let mut offset = 0;
-        while offset < content.len() {
-            // vẫn giới hạn chunk nhỏ
-            let chunk_len = (content.len() - offset).min(1024);
+            .await
+        {
+            error!("❌  FileUpl command failed: {:?}", e);
+            return false;
+        }
+        //Uploading data payload in 1 Kib of chunks
+        for chunk in content.chunks(1024) {
             raw_data.clear();
-            raw_data
-                .extend_from_slice(&content[offset..offset + chunk_len])
-                .unwrap();
+            if raw_data.extend_from_slice(chunk).is_err() {
+                error!("Raw data buffer overflow");
+                return false;
+            };
 
-            let _ = client
+            if let Err(_e) = client
                 .send(&SendRawData {
                     raw_data: raw_data.clone(),
-                    len: chunk_len,
+                    len: chunk.len() as usize,
                 })
-                .await;
-            offset += chunk_len;
+                .await
+            {
+                error!("❌  SendRawData command failed");
+                return false;
+            }
         }
 
         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+        true
     }
 
     // Upload certs
