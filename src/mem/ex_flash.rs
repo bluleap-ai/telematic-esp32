@@ -85,7 +85,7 @@ impl<'d> W25Q128FVSG<'d> {
     fn is_valid_address(&self, address: u32) -> bool {
         if address >= FLASH_CAPACITY {
             log::error!("Address {address} is out of bounds (max: {FLASH_CAPACITY})");
-            false
+            return false;
         } else {
             true
         }
