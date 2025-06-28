@@ -17,7 +17,7 @@ pub type TwaiOutbox = Channel<NoopRawMutex, CanFrame, 16>;
 #[embassy_executor::task]
 pub async fn can_receiver(
     mut rx: TwaiRx<'static, esp_hal::Async>,
-    channel: &'static TwaiOutbox,
+    can_channel: &'static TwaiOutbox,
 ) -> ! {
     info!("[CAN] Can rx task started\r");
     loop {
@@ -36,7 +36,7 @@ pub async fn can_receiver(
                         // if id.as_raw() == MQTT_CAN_PACKET {
                         info!("Receive MQTT CAN packet");
                         // Try to send can frame to wifi task without blocking
-                        let _ = channel.try_send(CanFrame {
+                        let _ = can_channel.try_send(CanFrame {
                             id: id.as_raw(),
                             len: frame.dlc() as u8,
                             data,

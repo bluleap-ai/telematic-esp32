@@ -11,6 +11,7 @@ use crate::net::atcmd::response::*;
 use crate::net::atcmd::Urc;
 use crate::task::can::*;
 use crate::task::netmgr::ConnectionEvent;
+use crate::task::netmgr::ACTIVE_CONNECTION_CHAN;
 use crate::task::netmgr::CONN_EVENT_CHAN;
 use crate::util::time::utc_date_to_unix_timestamp;
 use crate::{net::atcmd::general::*, task::can};
@@ -67,8 +68,11 @@ async fn handle_publish_mqtt_data(
     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
     mqtt_client_id: &str,
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
-    channel: &'static TwaiOutbox,
+    can_channel: &'static TwaiOutbox,
 ) -> bool {
+    // adding channel to receive connection events (wifi-data-come channel)
+    // if status is wifi and data come, then send data
+
     let mut trip_topic: heapless::String<128> = heapless::String::new();
     let mut trip_payload: heapless::String<1024> = heapless::String::new();
     let mut buf: [u8; 1024] = [0u8; 1024];
@@ -107,7 +111,7 @@ async fn handle_publish_mqtt_data(
             if gps_channel.try_send(trip_data.clone()).is_err() {
                 error!("[LTE] Failed to send TripData to channel");
             } else {
-                info!("[LTE] GPS data sent to channel: {:?}", trip_data);
+                info!("[LTE] GPS data sent to channel: {trip_data:?}");
             }
 
             // Serialize to JSON
@@ -154,7 +158,7 @@ async fn handle_publish_mqtt_data(
     let mut can_payload: heapless::String<1024> = heapless::String::new();
     let mut buf: [u8; 1024] = [0u8; 1024];
 
-    if let Ok(frame) = channel.try_receive() {
+    if let Ok(frame) = can_channel.try_receive() {
         info!("CAN data from LTE");
 
         // Prepare CAN topic
@@ -631,7 +635,7 @@ pub async fn quectel_tx_handler(
     mut _dtr: Output<'static>,
     urc_channel: &'static UrcChannel<Urc, 128, 3>,
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
-    channel: &'static TwaiOutbox,
+    can_channel: &'static TwaiOutbox,
 ) -> ! {
     let mut state: State = State::ResetHardware;
     let mut is_connected = false;
@@ -700,6 +704,11 @@ pub async fn quectel_tx_handler(
 
                 let trip_result = client.send(&RetrieveGpsRmc).await;
 
+                // still coding
+                let active_net = ACTIVE_CONNECTION_CHAN.receiver();
+                let connetion_event = active_net.try_receive();
+                info!("[Quectel] Waiting for active network connection {connetion_event:?}");
+
                 let trip_success = match trip_result {
                     Ok(res) => {
                         info!("[LTE] GPS RMC data received: {res:?}");
@@ -722,8 +731,12 @@ pub async fn quectel_tx_handler(
 
                         if gps_channel.try_send(trip_data.clone()).is_err() {
                             error!("[Quectel] Failed to send TripData to channel");
+                            // add logic to handle this case
+                            // if wifi available, do no change state
+                            // if wifi not available, change state to SetModemFunctionality
                         } else {
-                            info!("[Quectel] GPS data sent to channel: {:?}", trip_data);
+                            info!("[Quectel] GPS data sent to channel: {trip_data:?}");
+                            state = State::ResetHardware;
                         }
                     }
                     Err(e) => {
@@ -809,7 +822,8 @@ pub async fn quectel_tx_handler(
 
             State::MqttPublishData => {
                 info!("[Quectel] Publishing MQTT Data");
-                if handle_publish_mqtt_data(&mut client, MQTT_CLIENT_ID, gps_channel, channel).await
+                if handle_publish_mqtt_data(&mut client, MQTT_CLIENT_ID, gps_channel, can_channel)
+                    .await
                 {
                     info!("[Quectel] MQTT data published successfully");
                     // Transition to next state or maintain publishing state

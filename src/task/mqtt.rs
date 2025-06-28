@@ -23,14 +23,16 @@ use crate::task::netmgr::CONN_EVENT_CHAN;
 #[embassy_executor::task]
 pub async fn mqtt_handler(
     stack: &'static Stack<'static>,
-    channel: &'static TwaiOutbox,
+    can_channel: &'static TwaiOutbox,
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
     mut sha: SHA,
     mut rsa: RSA,
 ) {
     // No need to switch stacks, just use stack
     loop {
-        // info!("internet ConnectionEvent :?", ConnectionEvent);
+        // adding channel to receive connection events (wifi-data-come channel)
+        // if status is wifi and data come, then send data
+
         // Ensure the stack is connected
         if !stack.is_link_up() {
             Timer::after(Duration::from_millis(500)).await;
@@ -97,7 +99,7 @@ pub async fn mqtt_handler(
 
         info!("[MQTT] Connected to broker");
         loop {
-            if let Ok(frame) = channel.try_receive() {
+            if let Ok(frame) = can_channel.try_receive() {
                 let mut frame_str: heapless::String<80> = heapless::String::new();
                 let mut can_topic: heapless::String<80> = heapless::String::new();
 
@@ -119,14 +121,14 @@ pub async fn mqtt_handler(
                     .publish(&can_topic, frame_str.as_bytes(), mqttrust::QoS::AtMostOnce)
                     .await
                 {
-                    error!("[WIFI] Failed to publish MQTT packet: {:?}", e);
+                    error!("[WIFI] Failed to publish MQTT packet: {e:?}");
                     break;
                 }
                 info!("[WIFI] MQTT CAN sent OK {frame_str}");
             }
 
             if let Ok(trip_data) = gps_channel.try_receive() {
-                info!("[WIFI] GPS data received from channel: {:?}", trip_data);
+                info!("[WIFI] GPS data received from channel: {trip_data:?}");
                 let mut trip_payload: heapless::String<1024> = heapless::String::new();
                 let mut buf: [u8; 1024] = [0u8; 1024];
                 let mut trip_topic: heapless::String<80> = heapless::String::new();
@@ -151,7 +153,7 @@ pub async fn mqtt_handler(
                 )
                 .unwrap();
 
-                writeln!(&mut trip_str, "{}", trip_payload).unwrap();
+                writeln!(&mut trip_str, "{trip_payload}").unwrap();
 
                 info!("[WIFI] MQTT payload (trip): {trip_str}");
 
@@ -159,7 +161,7 @@ pub async fn mqtt_handler(
                     .publish(&trip_topic, trip_str.as_bytes(), mqttrust::QoS::AtMostOnce)
                     .await
                 {
-                    error!("[WIFI] Failed to publish MQTT packet: {:?}", e);
+                    error!("[WIFI] Failed to publish MQTT packet: {e:?}");
                     break;
                 }
                 info!("[WIFI] MQTT GPS sent OK {trip_str}");

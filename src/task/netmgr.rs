@@ -2,9 +2,9 @@ use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Sender};
 use embassy_time::{Duration, Instant, Timer};
+use esp_wifi::wifi::WifiState;
 #[allow(unused_imports)]
 use log::{error, info, warn};
-
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConnectionEvent {
@@ -68,8 +68,12 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
 
     // Start health monitoring tasks
     let health_sender = CONN_EVENT_CHAN.sender();
+    let health_receiver = CONN_EVENT_CHAN.receiver();
     spawner.spawn(net_health_monitor(health_sender)).ok();
     spawner.spawn(lte_health_monitor(health_sender)).ok();
+
+    let status_event = health_receiver.try_receive();
+    info!("[NetMgr] Current connection status: {:?}", status_event);
 
     loop {
         // Wait for either a connection event or a periodic health check timeout
@@ -78,6 +82,10 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
 
         embassy_futures::select::select(event_fut, timer_fut).await;
 
+        info!(
+            "[NetMgr] Current connection status: {:?}",
+            health_receiver.try_receive()
+        );
         // Handle connection events
         if let Ok(event) = event_receiver.try_receive() {
             info!("[NetMgr] Received event: {event:?}");
@@ -144,7 +152,11 @@ async fn net_health_monitor(
     loop {
         Timer::after(HEALTH_CHECK_INTERVAL).await;
         if esp_wifi::wifi::wifi_state() != esp_wifi::wifi::WifiState::StaConnected {
+            info!("[NetMgr] WiFi disconnected");
             let _ = event_sender.try_send(ConnectionEvent::WiFiDisconnected);
+        } else {
+            info!("[NetMgr] WiFi is connected");
+            let _ = event_sender.try_send(ConnectionEvent::WiFiConnected);
         }
     }
 }
