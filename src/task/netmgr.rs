@@ -1,4 +1,5 @@
 use embassy_executor::Spawner;
+use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Sender};
 use embassy_time::{Duration, Instant, Timer};
@@ -68,66 +69,65 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
 
     // Start health monitoring tasks
     let health_sender = CONN_EVENT_CHAN.sender();
-    let health_receiver = CONN_EVENT_CHAN.receiver();
+    // let health_receiver = CONN_EVENT_CHAN.receiver();
     spawner.spawn(net_health_monitor(health_sender)).ok();
     spawner.spawn(lte_health_monitor(health_sender)).ok();
 
-    let status_event = health_receiver.try_receive();
-    info!("[NetMgr] Current connection status: {:?}", status_event);
-
     loop {
-        // Wait for either a connection event or a periodic health check timeout
         let event_fut = event_receiver.receive();
         let timer_fut = Timer::after(HEALTH_CHECK_INTERVAL);
 
-        embassy_futures::select::select(event_fut, timer_fut).await;
-
-        info!(
-            "[NetMgr] Current connection status: {:?}",
-            health_receiver.try_receive()
-        );
-        // Handle connection events
-        if let Ok(event) = event_receiver.try_receive() {
-            info!("[NetMgr] Received event: {event:?}");
-
-            match event {
-                ConnectionEvent::WiFiConnected => {
-                    status.wifi_available = true;
-                    if should_prefer_wifi(&status) {
-                        perform_net_switch(&mut status, ActiveConnection::WiFi).await;
-                    }
-                }
-                ConnectionEvent::WiFiDisconnected => {
-                    status.wifi_available = false;
-                    if status.active == ActiveConnection::WiFi {
-                        if status.lte_available {
-                            perform_net_switch(&mut status, ActiveConnection::Lte).await;
-                        } else {
-                            status.active = ActiveConnection::None;
-                        }
-                    }
-                }
-                ConnectionEvent::LteConnected | ConnectionEvent::LteRegistered => {
-                    status.lte_available = true;
-                    if status.active == ActiveConnection::None && !status.wifi_available {
-                        perform_net_switch(&mut status, ActiveConnection::Lte).await;
-                    }
-                }
-                ConnectionEvent::LteDisconnected | ConnectionEvent::LteUnregistered => {
-                    status.lte_available = false;
-                    if status.active == ActiveConnection::Lte {
-                        if status.wifi_available {
+        match select(event_fut, timer_fut).await {
+            embassy_futures::select::Either::First(event) => {
+                info!("[NetMgr] Got connection event: {:?}", event);
+                // Handle connection events
+                match event {
+                    ConnectionEvent::WiFiConnected => {
+                        info!("[NetMgr] handle WiFi connected event");
+                        status.wifi_available = true;
+                        if should_prefer_wifi(&status) {
                             perform_net_switch(&mut status, ActiveConnection::WiFi).await;
-                        } else {
-                            status.active = ActiveConnection::None;
+                        }
+                    }
+                    ConnectionEvent::WiFiDisconnected => {
+                        info!("[NetMgr] handle WiFi disconnected event");
+                        status.wifi_available = false;
+                        if status.active == ActiveConnection::WiFi {
+                            if status.lte_available {
+                                perform_net_switch(&mut status, ActiveConnection::Lte).await;
+                            } else {
+                                status.active = ActiveConnection::None;
+                            }
+                        }
+                    }
+                    ConnectionEvent::LteConnected | ConnectionEvent::LteRegistered => {
+                        info!("[NetMgr] handle LTE connected/registered event");
+                        status.lte_available = true;
+                        if status.active == ActiveConnection::None && !status.wifi_available {
+                            perform_net_switch(&mut status, ActiveConnection::Lte).await;
+                        }
+                    }
+                    ConnectionEvent::LteDisconnected | ConnectionEvent::LteUnregistered => {
+                        info!("[NetMgr] handle LTE disconnected/unregistered event");
+                        status.lte_available = false;
+                        if status.active == ActiveConnection::Lte {
+                            if status.wifi_available {
+                                perform_net_switch(&mut status, ActiveConnection::WiFi).await;
+                            } else {
+                                status.active = ActiveConnection::None;
+                            }
                         }
                     }
                 }
-            }
 
-            // Notify others of status change
-            let _ = status_sender.try_send(status);
-            let _ = active_net_sender.try_send(status.active);
+                // Notify others of status change
+                let _ = status_sender.try_send(status);
+                let _ = active_net_sender.try_send(status.active);
+            }
+            embassy_futures::select::Either::Second(_) => {
+                info!("[NetMgr] Health check timeout reached");
+                // handle timeout
+            }
         }
 
         // Handle manual switch requests
@@ -152,11 +152,15 @@ async fn net_health_monitor(
     loop {
         Timer::after(HEALTH_CHECK_INTERVAL).await;
         if esp_wifi::wifi::wifi_state() != esp_wifi::wifi::WifiState::StaConnected {
+            let _ = event_sender
+                .try_send(ConnectionEvent::WiFiDisconnected)
+                .unwrap();
             info!("[NetMgr] WiFi disconnected");
-            let _ = event_sender.try_send(ConnectionEvent::WiFiDisconnected);
         } else {
+            let _ = event_sender
+                .try_send(ConnectionEvent::WiFiConnected)
+                .unwrap();
             info!("[NetMgr] WiFi is connected");
-            let _ = event_sender.try_send(ConnectionEvent::WiFiConnected);
         }
     }
 }
