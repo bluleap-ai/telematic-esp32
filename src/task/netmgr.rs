@@ -2,7 +2,7 @@ use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Sender};
 use embassy_time::{Duration, Instant, Timer};
-use esp_wifi::wifi::WifiState;
+// use esp_wifi::wifi::WifiState;
 #[allow(unused_imports)]
 use log::{error, info, warn};
 #[allow(dead_code)]
@@ -169,6 +169,10 @@ async fn lte_health_monitor(
 
     loop {
         Timer::after(HEALTH_CHECK_INTERVAL).await;
+        // if esp_wifi::wifi::wifi_state() != esp_wifi::wifi::WifiState::StaConnected {
+        //     info!("[NetMgr] WiFi disconnected");
+        //     let _ = event_sender.try_send(ConnectionEvent::WiFiDisconnected);
+        // }
         // Add logic to check LTE status and send events
         // For example:
         if !lte_is_connected() {

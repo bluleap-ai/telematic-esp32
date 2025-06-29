@@ -7,6 +7,7 @@ use atat::{
 };
 
 use crate::cfg::net_cfg::*;
+use crate::net::atcmd::general::*;
 use crate::net::atcmd::response::*;
 use crate::net::atcmd::Urc;
 use crate::task::can::*;
@@ -14,18 +15,23 @@ use crate::task::netmgr::ConnectionEvent;
 use crate::task::netmgr::ACTIVE_CONNECTION_CHAN;
 use crate::task::netmgr::CONN_EVENT_CHAN;
 use crate::util::time::utc_date_to_unix_timestamp;
-use crate::{net::atcmd::general::*, task::can};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
-use embedded_can::Frame;
 use esp_hal::{
     gpio::Output,
     uart::{UartRx, UartTx},
     Async,
 };
-use esp_println::print;
 use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq)]
+pub enum MqttConnectError {
+    CommandFailed,
+    StringConversion,
+    Timeout,
+    ModemError(u8),
+}
 
 const REGISTERED_HOME: u8 = 1;
 const UNREGISTERED_SEARCHING: u8 = 2;
@@ -64,6 +70,7 @@ enum State {
     //Connected,
     //Disconnected,
 }
+
 async fn handle_publish_mqtt_data(
     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
     mqtt_client_id: &str,
@@ -88,7 +95,7 @@ async fn handle_publish_mqtt_data(
     // --- GPS Data ---
     let trip_result = client.send(&RetrieveGpsRmc).await;
 
-    let trip_success = match trip_result {
+    match trip_result {
         Ok(res) => {
             info!("[LTE] GPS RMC data received: {res:?}");
 
@@ -139,16 +146,19 @@ async fn handle_publish_mqtt_data(
                         .await,
                 ) {
                     info!("[LTE] Trip data published successfully");
+                    is_gps_success = true;
                 } else {
                     error!("[LTE] Failed to publish trip data");
                     is_gps_success = false;
                 }
             } else {
                 error!("[LTE] Failed to serialize trip/GPS data");
+                is_gps_success = false;
             }
         }
         Err(e) => {
             warn!("[LTE] Failed to retrieve GPS data: {e:?}");
+            is_gps_success = false;
         }
     };
 
@@ -199,16 +209,16 @@ async fn handle_publish_mqtt_data(
                     .await,
             ) {
                 info!("[LTE] CAN data published successfully");
+                is_can_success = true;
             } else {
                 error!("[LTE] Failed to publish CAN data");
                 is_can_success = false;
             }
         } else {
             error!("[LTE] Failed to serialize CAN data");
-            // false
+            is_can_success = false;
         }
     }
-
     is_can_success && is_gps_success
 }
 
@@ -486,14 +496,6 @@ pub async fn check_network_registration(
     false
 }
 
-#[derive(Debug, PartialEq)]
-pub enum MqttConnectError {
-    CommandFailed,
-    StringConversion,
-    Timeout,
-    ModemError(u8),
-}
-
 pub async fn open_mqtt_connection(
     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
     urc_channel: &'static UrcChannel<Urc, 128, 3>,
@@ -709,10 +711,9 @@ pub async fn quectel_tx_handler(
                 let connetion_event = active_net.try_receive();
                 info!("[Quectel] Waiting for active network connection {connetion_event:?}");
 
-                let trip_success = match trip_result {
+                match trip_result {
                     Ok(res) => {
                         info!("[LTE] GPS RMC data received: {res:?}");
-
                         let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
                         let mut device_id = heapless::String::new();
                         let mut trip_id = heapless::String::new();
@@ -731,12 +732,13 @@ pub async fn quectel_tx_handler(
 
                         if gps_channel.try_send(trip_data.clone()).is_err() {
                             error!("[Quectel] Failed to send TripData to channel");
+                            state = State::ResetHardware;
+                        } else {
+                            info!("[Quectel] GPS data sent to channel: {trip_data:?}");
                             // add logic to handle this case
                             // if wifi available, do no change state
                             // if wifi not available, change state to SetModemFunctionality
-                        } else {
-                            info!("[Quectel] GPS data sent to channel: {trip_data:?}");
-                            state = State::ResetHardware;
+                            // state = State::SetModemFunctionality;
                         }
                     }
                     Err(e) => {

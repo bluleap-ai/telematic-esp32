@@ -1,13 +1,13 @@
+use crate::cfg::net_cfg::{WIFI_PSWD, WIFI_SSID};
+use crate::task::netmgr::*;
 use embassy_net::Runner;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Timer};
+use esp_wifi::wifi::WifiState;
 use esp_wifi::wifi::{
     ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiStaDevice,
-    WifiState,
 };
 use log::{error, info, warn};
-
-use crate::cfg::net_cfg::{WIFI_PSWD, WIFI_SSID};
-
 #[embassy_executor::task]
 pub async fn connection(mut controller: WifiController<'static>) {
     info!("[WiFi] Connection task started");
@@ -22,8 +22,10 @@ pub async fn connection(mut controller: WifiController<'static>) {
     loop {
         if esp_wifi::wifi::wifi_state() == WifiState::StaConnected {
             info!("[WiFi] Already connected. Waiting for disconnect event...");
+            // let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::WiFiConnected);
             controller.wait_for_event(WifiEvent::StaDisconnected).await;
             info!("[WiFi] Disconnected. Reconnecting in 5 seconds...");
+            // let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::WiFiDisconnected);
             Timer::after(Duration::from_millis(5000)).await
         }
         if !matches!(controller.is_started(), Ok(true)) {

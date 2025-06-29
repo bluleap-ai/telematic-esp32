@@ -53,7 +53,7 @@ macro_rules! mk_static {
         x
     }};
 }
-
+/*
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
@@ -62,6 +62,7 @@ async fn main(spawner: Spawner) -> ! {
         config.cpu_clock = CpuClock::max();
         config
     });
+    info!("ESP32-C6 Telematic Device Starting...");
     esp_alloc::heap_allocator!(200 * 1024);
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let timg1 = TimerGroup::new(peripherals.TIMG1);
@@ -143,7 +144,7 @@ async fn main(spawner: Spawner) -> ! {
     let can = twai_config.start();
     static CHANNEL: StaticCell<TwaiOutbox> = StaticCell::new();
     let channel = &*CHANNEL.init(Channel::new());
-    let (can_rx, can_tx) = can.split();
+    let (can_rx, _can_tx) = can.split();
 
     let gps_channel = &*GPS_CHANNEL.init(Channel::new());
     spawner.spawn(can_receiver(can_rx, channel)).ok();
@@ -190,5 +191,74 @@ async fn main(spawner: Spawner) -> ! {
         Timer::after_secs(2).await;
         #[cfg(feature = "wdg")]
         rtc.rwdt.feed();
+    }
+}
+
+*/
+
+#[embassy_executor::main]
+async fn main(spawner: Spawner) {
+    let peripherals = esp_hal::peripherals::Peripherals::take().unwrap();
+    let mut gpio = peripherals.GPIO;
+    let uart = peripherals.UART0;
+
+    let tx_pin = gpio.GPIO23;
+    let rx_pin = gpio.GPIO15;
+    let pen_pin = gpio.GPIO21;
+    let dtr_pin = gpio.GPIO22;
+
+    static GPS_CHANNEL: Channel<NoopRawMutex, TripData, 8> = Channel::new();
+    static CAN_CHANNEL: Channel<NoopRawMutex, TwaiOutbox, 8> = Channel::new();
+    static CONN_EVENT_CHAN: Channel<NoopRawMutex, quectel::ConnectionEvent, 8> = Channel::new();
+    static ACTIVE_CONNECTION_CHAN: Channel<NoopRawMutex, (), 1> = Channel::new();
+    static URC_CHANNEL: quectel::UrcChannel<Urc, 128, 3> = quectel::UrcChannel::new();
+
+    static CA_CHAIN: &[u8] = include_bytes!("../certs/crt.pem");
+    static CERTIFICATE: &[u8] = include_bytes!("../certs/dvt.crt");
+    static PRIVATE_KEY: &[u8] = include_bytes!("../certs/dvt.key");
+    static MQTT_CLIENT_ID: &str = "my_mqtt_client_id";
+
+    let (mut quectel, ingress, uart_rx) = QuectelDefault::init(
+        &mut gpio,
+        uart,
+        tx_pin,
+        rx_pin,
+        pen_pin,
+        dtr_pin,
+        CA_CHAIN,
+        CERTIFICATE,
+        PRIVATE_KEY,
+        MQTT_CLIENT_ID,
+        &URC_CHANNEL,
+        &GPS_CHANNEL,
+        &CAN_CHANNEL,
+        &CONN_EVENT_CHAN,
+        &ACTIVE_CONNECTION_CHAN,
+    );
+
+    // Optional: Spawn RX handler for URCs
+    spawner
+        .spawn(quectel_rx_handler(ingress, uart_rx))
+        .expect("Failed to spawn RX handler");
+
+    // Call specific methods
+    quectel.reset_hardware().await;
+    quectel.enable_gps().await;
+    quectel.enable_assist_gps().await;
+
+    loop {
+        match quectel.get_gps().await {
+            Ok(gps_data) => {
+                info!("[Main] GPS data: {:?}", gps_data);
+                info!(
+                    "[Main] GPS - Latitude: {}, Longitude: {}, Timestamp: {}",
+                    gps_data.latitude, gps_data.longitude, gps_data.timestamp
+                );
+            }
+            Err(e) => {
+                warn!("[Main] Failed to get GPS data: {:?}", e);
+            }
+        }
+        embassy_time::Timer::after(embassy_time::Duration::from_secs(5)).await;
     }
 }

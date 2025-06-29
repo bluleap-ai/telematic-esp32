@@ -5,7 +5,6 @@ use embassy_net::{
 use embassy_time::{Duration, Timer};
 use esp_hal::peripherals::{RSA, SHA};
 use esp_mbedtls::{asynch::Session, Certificates, Mode, Tls, TlsVersion, X509};
-use esp_println::println;
 use log::{error, info, warn};
 
 use crate::task::lte::TripData;
@@ -17,6 +16,7 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
 use crate::cfg::net_cfg::*;
 use crate::task::can::TwaiOutbox;
+
 use crate::task::netmgr::ConnectionEvent;
 use crate::task::netmgr::CONN_EVENT_CHAN;
 
