@@ -85,21 +85,239 @@ pub struct TwaiOutbox;
 
 // Placeholder functions
 async fn reset_modem<P: OutputPin>(pen: &mut Output<P>) {
-    // Implement modem reset logic
+    pen.set_low(); // Power down the modem
+    embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+    pen.set_high(); // Power up the modem
+    embassy_time::Timer::after(embassy_time::Duration::from_secs(5)).await;
 }
 
-fn check_result<T>(result: Result<T, AtatError>) -> bool {
-    result.is_ok()
+fn check_result<T>(res: Result<T, atat::Error>) -> bool
+where
+    T: Debug,
+{
+    match res {
+        Ok(value) => {
+            info!("[Quectel] \t Command succeeded: {value:?}");
+            true
+        }
+        Err(e) => {
+            error!("[Quectel] Failed to send AT command: {e:?}");
+            false
+        }
+    }
 }
 
-async fn upload_mqtt_cert_files(
-    client: &mut Client<'static, UartTx<'static, Async>, 1024>,
-    urc_channel: &UrcChannel<Urc, 128, 3>,
-    ca_chain: &[u8],
-    certificate: &[u8],
-    private_key: &[u8],
-) -> bool {
-    true
+pub async fn upload_mqtt_cert(&mut self) -> State {
+    info!("[Quectel] Upload MQTT certs to Quectel");
+
+    // File names for certificates (not hardcoded, but using fixed names for UFS)
+    const CA_NAME: &str = "crt.pem";
+    const CERT_NAME: &str = "dvt.crt";
+    const KEY_NAME: &str = "dvt.key";
+    const CHUNK_SIZE: usize = 1024;
+
+    let mut raw_data = Vec::<u8, 4096>::new();
+    raw_data.clear();
+    let mut subscriber = self.urc_channel.subscribe().unwrap();
+
+    // List files and log them
+    let _ = self.client.send(&FileList).await;
+    let now = embassy_time::Instant::now();
+    loop {
+        embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+        match subscriber.try_next_message_pure() {
+            Some(Urc::ListFile(file)) => {
+                info!("[Quectel] File: {file:?}");
+            }
+            Some(e) => {
+                error!("[Quectel] Unknown URC {e:?}");
+            }
+            None => {
+                info!("[Quectel] Waiting for response...");
+            }
+        }
+        if now.elapsed().as_secs() > 10 {
+            break;
+        }
+    }
+
+    // Delete existing certificate files
+    info!("[Quectel] Remove CA_CRT path");
+    let _ = self
+        .client
+        .send(&FileDel {
+            name: String::from_str(CA_NAME).unwrap(),
+        })
+        .await;
+
+    info!("[Quectel] Remove CLIENT_CRT path");
+    let _ = self
+        .client
+        .send(&FileDel {
+            name: String::from_str(CERT_NAME).unwrap(),
+        })
+        .await;
+
+    info!("[Quectel] Remove CLIENT_KEY path");
+    let _ = self
+        .client
+        .send(&FileDel {
+            name: String::from_str(KEY_NAME).unwrap(),
+        })
+        .await;
+
+    // Upload CA certificate
+    info!("[Quectel] Upload CA certificate");
+    let ca_size = self.ca_chain.len();
+    let _ = self
+        .client
+        .send(&FileUpl {
+            name: String::from_str(CA_NAME).unwrap(),
+            size: ca_size,
+        })
+        .await;
+
+    for chunk in self.ca_chain.chunks(CHUNK_SIZE) {
+        raw_data.clear();
+        let _ = raw_data.extend_from_slice(chunk);
+        let _ = self
+            .client
+            .send(&SendRawData {
+                raw_data: raw_data.clone(),
+                len: chunk.len(),
+            })
+            .await;
+    }
+    embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+
+    // Upload client certificate
+    info!("[Quectel] Upload client certificate");
+    let cert_size = self.certificate.len();
+    let _ = self
+        .client
+        .send(&FileUpl {
+            name: String::from_str(CERT_NAME).unwrap(),
+            size: cert_size,
+        })
+        .await;
+
+    for chunk in self.certificate.chunks(CHUNK_SIZE) {
+        raw_data.clear();
+        let _ = raw_data.extend_from_slice(chunk);
+        let _ = self
+            .client
+            .send(&SendRawData {
+                raw_data: raw_data.clone(),
+                len: chunk.len(),
+            })
+            .await;
+    }
+    embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+
+    // Upload client private key
+    info!("[Quectel] Upload client private key");
+    let key_size = self.private_key.len();
+    let _ = self
+        .client
+        .send(&FileUpl {
+            name: String::from_str(KEY_NAME).unwrap(),
+            size: key_size,
+        })
+        .await;
+
+    for chunk in self.private_key.chunks(CHUNK_SIZE) {
+        raw_data.clear();
+        let _ = raw_data.extend_from_slice(chunk);
+        let _ = self
+            .client
+            .send(&SendRawData {
+                raw_data: raw_data.clone(),
+                len: chunk.len(),
+            })
+            .await;
+    }
+    embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+
+    // Set MQTT and SSL configurations
+    info!("[Quectel] Set MQTTS configuration");
+    let _ = self
+        .client
+        .send(&MqttConfig {
+            name: String::from_str("recv/mode").unwrap(),
+            param_1: Some(0),
+            param_2: Some(0),
+            param_3: Some(1),
+        })
+        .await;
+    let _ = self
+        .client
+        .send(&MqttConfig {
+            name: String::from_str("SSL").unwrap(),
+            param_1: Some(0),
+            param_2: Some(1),
+            param_3: Some(2),
+        })
+        .await;
+    let _ = self
+        .client
+        .send(&SslConfigCert {
+            name: String::from_str("cacert").unwrap(),
+            context_id: 2,
+            cert_path: Some(String::from_str("UFS:crt.pem").unwrap()),
+        })
+        .await;
+    let _ = self
+        .client
+        .send(&SslConfigCert {
+            name: String::from_str("clientcert").unwrap(),
+            context_id: 2,
+            cert_path: Some(String::from_str("UFS:dvt.crt").unwrap()),
+        })
+        .await;
+    let _ = self
+        .client
+        .send(&SslConfigCert {
+            name: String::from_str("clientkey").unwrap(),
+            context_id: 2,
+            cert_path: Some(String::from_str("UFS:dvt.key").unwrap()),
+        })
+        .await;
+    let _ = self
+        .client
+        .send(&SslConfigOther {
+            name: String::from_str("seclevel").unwrap(),
+            context_id: 2,
+            level: 2,
+        })
+        .await;
+    let _ = self
+        .client
+        .send(&SslConfigOther {
+            name: String::from_str("sslversion").unwrap(),
+            context_id: 2,
+            level: 4,
+        })
+        .await;
+    let _ = self.client.send(&SslSetCipherSuite).await;
+    let _ = self
+        .client
+        .send(&SslConfigOther {
+            name: String::from_str("ignorelocaltime").unwrap(),
+            context_id: 2,
+            level: 1,
+        })
+        .await;
+    let _ = self
+        .client
+        .send(&MqttConfig {
+            name: String::from_str("version").unwrap(),
+            param_1: Some(0),
+            param_2: Some(4),
+            param_3: None,
+        })
+        .await;
+
+    State::CheckNetworkRegistration
 }
 
 async fn check_network_registration(
