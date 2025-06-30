@@ -8,7 +8,6 @@
 **/log.txt
 
 # Ignore all net_cfg.rs files
-**/net_cfg.rs
 
 # Ignore certificate files in certs directory
 **/crt.pem
