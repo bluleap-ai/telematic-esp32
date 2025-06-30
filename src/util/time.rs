@@ -6,7 +6,7 @@ const DAYS_IN_MONTH: [[u16; 12]; 2] = [
 
 /// Check if a year is a leap year
 const fn is_leap_year(year: u16) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+    year.is_multiple_of(4) && !year.is_multiple_of(100) || year.is_multiple_of(400)
 }
 
 /// Convert UTC and date to UNIX timestamp
