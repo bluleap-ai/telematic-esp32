@@ -52,8 +52,6 @@ pub async fn mqtt_handler(
             continue;
         } else {
             Timer::after(Duration::from_millis(3000)).await;
-        } else {
-            Timer::after(Duration::from_millis(3000)).await;
         }
 
         // Perform MQTT operations using the Wi-Fi stack
