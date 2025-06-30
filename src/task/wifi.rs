@@ -1,7 +1,5 @@
 use crate::cfg::net_cfg::{WIFI_PSWD, WIFI_SSID};
-use crate::task::netmgr::*;
 use embassy_net::Runner;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Timer};
 use esp_wifi::wifi::WifiState;
 use esp_wifi::wifi::{

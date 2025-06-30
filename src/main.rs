@@ -1,35 +1,26 @@
 #![no_std]
 #![no_main]
 
-// Declare modules at the crate root
 mod cfg;
 mod hal;
 mod net;
 mod task;
 mod util;
 
-// Import the necessary modules
 //use crate::hal::flash;
 use crate::net::atcmd::Urc;
-use task::can::*;
-use task::lte::*;
-use task::mqtt::*;
-#[cfg(feature = "ota")]
-use task::ota::ota_handler;
-use task::wifi::*;
-
-// Import the necessary modules
 use atat::{ResponseSlot, UrcChannel};
 use embassy_executor::Spawner;
 use embassy_net::{Stack, StackResources};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
+use embassy_time::{Duration, Timer};
+use esp_backtrace as _;
 #[cfg(feature = "ota")]
-use embassy_time::Duration;
-use embassy_time::Timer;
 use esp_backtrace as _;
 #[cfg(feature = "wdg")]
 use esp_hal::rtc_cntl::{Rtc, RwdtStage};
+
 use esp_hal::{
     clock::CpuClock,
     gpio::Output,
@@ -41,8 +32,15 @@ use esp_hal::{
 use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
 use log::info;
 use static_cell::StaticCell;
+use task::can::*;
 use task::lte::TripData;
+use task::lte::*;
+use task::mqtt::*;
 use task::netmgr::net_manager_task;
+#[cfg(feature = "ota")]
+use task::ota::ota_handler;
+use task::quectel::Quectel;
+use task::wifi::*;
 pub type GpsOutbox = Channel<NoopRawMutex, TripData, 8>;
 static GPS_CHANNEL: StaticCell<GpsOutbox> = StaticCell::new();
 macro_rules! mk_static {
@@ -53,7 +51,7 @@ macro_rules! mk_static {
         x
     }};
 }
-/*
+
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
@@ -68,10 +66,6 @@ async fn main(spawner: Spawner) -> ! {
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     esp_hal_embassy::init(timg1.timer0);
     let trng = &mut *mk_static!(Trng<'static>, Trng::new(peripherals.RNG, peripherals.ADC1));
-    //let trng = &*mk_static!(
-    //    Mutex<Trng<'static>, EspWifiController<'static>>,
-    //    Mutex::new(Trng::new(peripherals.RNG, peripherals.ADC1))
-    //);
     let init = &*mk_static!(
         EspWifiController<'static>,
         init(timg0.timer0, trng.rng, peripherals.RADIO_CLK).unwrap()
@@ -98,6 +92,9 @@ async fn main(spawner: Spawner) -> ! {
     );
     let stack = &*mk_static!(Stack, stack);
 
+    // ==============================
+    // === LTE UART + Quectel ===
+    // ==============================
     let uart_tx_pin = peripherals.GPIO23;
     let uart_rx_pin = peripherals.GPIO15;
     let quectel_pen_pin = Output::new(peripherals.GPIO21, esp_hal::gpio::Level::High);
@@ -110,6 +107,7 @@ async fn main(spawner: Spawner) -> ! {
         .with_tx(uart_tx_pin)
         .into_async();
     let (uart_rx, uart_tx) = uart0.split();
+
     static RES_SLOT: ResponseSlot<1024> = ResponseSlot::new();
     static URC_CHANNEL: UrcChannel<Urc, 128, 3> = UrcChannel::new();
     static INGRESS_BUF: StaticCell<[u8; 1024]> = StaticCell::new();
@@ -127,6 +125,9 @@ async fn main(spawner: Spawner) -> ! {
         atat::Config::default(),
     );
 
+    // ==============================
+    // === CAN / MQTT ===
+    // ==============================
     let can_tx_pin = peripherals.GPIO1;
     let can_rx_pin = peripherals.GPIO10;
     const CAN_BAUDRATE: twai::BaudRate = twai::BaudRate::B250K;
@@ -147,33 +148,23 @@ async fn main(spawner: Spawner) -> ! {
     let (can_rx, _can_tx) = can.split();
 
     let gps_channel = &*GPS_CHANNEL.init(Channel::new());
-    spawner.spawn(can_receiver(can_rx, channel)).ok();
-    spawner.spawn(connection(controller)).ok();
-    spawner.spawn(net_task(runner)).ok();
-    spawner
-        .spawn(mqtt_handler(
-            stack,
-            channel,
-            gps_channel,
-            peripherals.SHA,
-            peripherals.RSA,
-        ))
-        .ok();
-    spawner.spawn(quectel_rx_handler(ingress, uart_rx)).ok();
-    spawner
-        .spawn(quectel_tx_handler(
-            client,
-            quectel_pen_pin,
-            quectel_dtr_pin,
-            &URC_CHANNEL,
-            gps_channel,
-            channel,
-        ))
-        .ok();
 
-    spawner.spawn(net_manager_task(spawner)).ok();
+    spawner.spawn(can_receiver(can_rx, channel)).unwrap();
+    spawner.spawn(connection(controller)).unwrap();
+    spawner.spawn(net_task(runner)).unwrap();
+    // spawner
+    //     .spawn(mqtt_handler(
+    //         stack,
+    //         channel,
+    //         gps_channel,
+    //         peripherals.SHA,
+    //         peripherals.RSA,
+    //     ))
+    //     .unwrap();
+
+    spawner.spawn(net_manager_task(spawner)).unwrap();
+
     #[cfg(feature = "ota")]
-    //wait until wifi connected
     {
         loop {
             if stack.is_link_up() {
@@ -181,84 +172,43 @@ async fn main(spawner: Spawner) -> ! {
             }
             Timer::after(Duration::from_millis(500)).await;
         }
-        spawner
-            .spawn(ota_handler(spawner, trng, stack))
-            .expect("Failed to spawn OTA handler task");
+        spawner.spawn(ota_handler(spawner, trng, stack)).unwrap();
     }
 
-    // WDG feed task
-    loop {
-        Timer::after_secs(2).await;
-        #[cfg(feature = "wdg")]
-        rtc.rwdt.feed();
-    }
-}
+    // ====================================
+    // === Spawn RX handler Quectel ===
+    // ====================================
+    spawner.spawn(quectel_rx_handler(ingress, uart_rx)).ok();
+    // ====================================
+    // === Quectel flow API driver ===
+    // ====================================
+    let mut quectel = Quectel::new(client, quectel_pen_pin, quectel_dtr_pin, &URC_CHANNEL);
 
-*/
-
-#[embassy_executor::main]
-async fn main(spawner: Spawner) {
-    let peripherals = esp_hal::peripherals::Peripherals::take().unwrap();
-    let mut gpio = peripherals.GPIO;
-    let uart = peripherals.UART0;
-
-    let tx_pin = gpio.GPIO23;
-    let rx_pin = gpio.GPIO15;
-    let pen_pin = gpio.GPIO21;
-    let dtr_pin = gpio.GPIO22;
-
-    static GPS_CHANNEL: Channel<NoopRawMutex, TripData, 8> = Channel::new();
-    static CAN_CHANNEL: Channel<NoopRawMutex, TwaiOutbox, 8> = Channel::new();
-    static CONN_EVENT_CHAN: Channel<NoopRawMutex, quectel::ConnectionEvent, 8> = Channel::new();
-    static ACTIVE_CONNECTION_CHAN: Channel<NoopRawMutex, (), 1> = Channel::new();
-    static URC_CHANNEL: quectel::UrcChannel<Urc, 128, 3> = quectel::UrcChannel::new();
-
-    static CA_CHAIN: &[u8] = include_bytes!("../certs/crt.pem");
-    static CERTIFICATE: &[u8] = include_bytes!("../certs/dvt.crt");
-    static PRIVATE_KEY: &[u8] = include_bytes!("../certs/dvt.key");
-    static MQTT_CLIENT_ID: &str = "my_mqtt_client_id";
-
-    let (mut quectel, ingress, uart_rx) = QuectelDefault::init(
-        &mut gpio,
-        uart,
-        tx_pin,
-        rx_pin,
-        pen_pin,
-        dtr_pin,
-        CA_CHAIN,
-        CERTIFICATE,
-        PRIVATE_KEY,
-        MQTT_CLIENT_ID,
-        &URC_CHANNEL,
-        &GPS_CHANNEL,
-        &CAN_CHANNEL,
-        &CONN_EVENT_CHAN,
-        &ACTIVE_CONNECTION_CHAN,
-    );
-
-    // Optional: Spawn RX handler for URCs
-    spawner
-        .spawn(quectel_rx_handler(ingress, uart_rx))
-        .expect("Failed to spawn RX handler");
-
-    // Call specific methods
     quectel.reset_hardware().await;
-    quectel.enable_gps().await;
-    quectel.enable_assist_gps().await;
+    Timer::after(Duration::from_secs(5)).await;
+    quectel.disable_echo_mode().await.unwrap();
+    quectel.get_model_id().await.unwrap();
+    quectel.get_netword_signal_quality().await.unwrap();
+    quectel.enable_gps().await.unwrap();
+    quectel.enable_assist_gps().await.unwrap();
 
     loop {
         match quectel.get_gps().await {
-            Ok(gps_data) => {
-                info!("[Main] GPS data: {:?}", gps_data);
+            Ok(gps) => {
+                info!("[Main] GPS: {:?}", gps);
                 info!(
                     "[Main] GPS - Latitude: {}, Longitude: {}, Timestamp: {}",
-                    gps_data.latitude, gps_data.longitude, gps_data.timestamp
+                    gps.latitude, gps.longitude, gps.timestamp
                 );
             }
             Err(e) => {
-                warn!("[Main] Failed to get GPS data: {:?}", e);
+                info!("[Main] Failed to get GPS data: {:?}", e);
             }
         }
-        embassy_time::Timer::after(embassy_time::Duration::from_secs(5)).await;
+        Timer::after(Duration::from_secs(5)).await;
+        // Timer::after(Duration::from_millis(10)).await;
+
+        #[cfg(feature = "wdg")]
+        rtc.rwdt.feed();
     }
 }

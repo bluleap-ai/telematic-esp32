@@ -63,7 +63,6 @@ enum State {
     //Connected,
     //Disconnected,
 }
-
 async fn handle_publish_mqtt_data(
     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
     mqtt_client_id: &str,
@@ -147,19 +146,16 @@ async fn handle_publish_mqtt_data(
                         .await,
                 ) {
                     info!("[LTE] Trip data published successfully");
-                    is_gps_success = true;
                 } else {
                     error!("[LTE] Failed to publish trip data");
                     is_gps_success = false;
                 }
             } else {
                 error!("[LTE] Failed to serialize trip/GPS data");
-                is_gps_success = false;
             }
         }
         Err(e) => {
             warn!("[LTE] Failed to retrieve GPS data: {e:?}");
-            is_gps_success = false;
         }
     }
 
@@ -210,17 +206,40 @@ async fn handle_publish_mqtt_data(
                     .await,
             ) {
                 info!("[LTE] CAN data published successfully");
-                is_can_success = true;
             } else {
                 error!("[LTE] Failed to publish CAN data");
                 is_can_success = false;
             }
         } else {
             error!("[LTE] Failed to serialize CAN data");
-            is_can_success = false;
+            // false
         }
     }
+
     is_can_success && is_gps_success
+}
+
+fn check_result<T>(res: Result<T, atat::Error>) -> bool
+where
+    T: Debug,
+{
+    match res {
+        Ok(value) => {
+            info!("[Quectel] \t Command succeeded: {value:?}");
+            true
+        }
+        Err(e) => {
+            error!("[Quectel] Failed to send AT command: {e:?}");
+            false
+        }
+    }
+}
+
+async fn reset_modem(pen: &mut Output<'static>) {
+    pen.set_low(); // Power down the modem
+    embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+    pen.set_high(); // Power up the modem
+    embassy_time::Timer::after(embassy_time::Duration::from_secs(5)).await;
 }
 
 pub async fn upload_mqtt_cert_files(
@@ -431,6 +450,14 @@ pub async fn check_network_registration(
     // Timeout reached without successful registration
     error!("[Quectel] Network registration timed out");
     false
+}
+
+#[derive(Debug, PartialEq)]
+pub enum MqttConnectError {
+    CommandFailed,
+    StringConversion,
+    Timeout,
+    ModemError(u8),
 }
 
 pub async fn open_mqtt_connection(

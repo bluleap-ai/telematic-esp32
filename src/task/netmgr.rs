@@ -3,7 +3,7 @@ use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Channel, Sender};
 use embassy_time::{Duration, Instant, Timer};
-// use esp_wifi::wifi::WifiState;
+use esp_wifi::wifi::WifiState;
 #[allow(unused_imports)]
 use log::{error, info, warn};
 #[allow(dead_code)]
