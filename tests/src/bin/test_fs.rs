@@ -314,9 +314,9 @@ async fn main(_spawner: Spawner) -> ! {
 
     // Test data
     let firmware_data = b"Firmware v1.0\nThis is test firmware data for embedded system";
-    let ca_chain = include_str!("../../../certs/ca.crt").as_bytes();
-    let cert_data = include_str!("../../../certs/dvt.crt").as_bytes();
-    let private_key = include_str!("../../../certs/dvt.key").as_bytes();
+    let ca_chain = include_str!("../../../cert/ca.crt").as_bytes();
+    let cert_data = include_str!("../../../cert/dvt.crt").as_bytes();
+    let private_key = include_str!("../../../cert/dvt.key").as_bytes();
 
     info!("=== Starting File Write Operations ===");
     info!("Files to write:");

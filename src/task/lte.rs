@@ -95,7 +95,7 @@ async fn handle_publish_mqtt_data(
     // --- GPS Data ---
     let trip_result = client.send(&RetrieveGpsRmc).await;
 
-    let _trip_success = match trip_result {
+    match trip_result {
         Ok(res) => {
             info!("[LTE] GPS RMC data received: {res:?}");
 
@@ -157,7 +157,7 @@ async fn handle_publish_mqtt_data(
         Err(e) => {
             warn!("[LTE] Failed to retrieve GPS data: {e:?}");
         }
-    };
+    }
 
     // --- CAN Data ---
 
@@ -605,9 +605,9 @@ pub async fn quectel_tx_handler(
 ) -> ! {
     let mut state: State = State::ResetHardware;
     let mut is_connected = false;
-    let ca_chain = include_str!("../../certs/ca.crt").as_bytes();
-    let certificate = include_str!("../../certs/dvt.crt").as_bytes();
-    let private_key = include_str!("../../certs/dvt.key").as_bytes();
+    let ca_chain = include_str!("../../cert/crt.pem").as_bytes();
+    let certificate = include_str!("../../cert/dvt.crt").as_bytes();
+    let private_key = include_str!("../../cert/dvt.key").as_bytes();
 
     loop {
         match state {

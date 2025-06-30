@@ -2,7 +2,7 @@ use std::env;
 use std::fs::{create_dir_all, File};
 use std::io::Write;
 use std::path::Path;
-
+#[allow(clippy::uninlined_format_args)]
 fn generate_net_cfg() {
     // Tell Cargo to rebuild if any environment variables change
     println!("cargo:rerun-if-env-changed=WIFI_PSWD");
