@@ -81,7 +81,7 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
 
         match select(event_fut, timer_fut).await {
             embassy_futures::select::Either::First(event) => {
-                info!("[NetMgr] Got connection event: {:?}", event);
+                info!("[NetMgr] Got connection event: {event:?}");
                 // Handle connection events
                 match event {
                     ConnectionEvent::WiFiConnected => {
@@ -159,12 +159,12 @@ async fn net_health_monitor(
     loop {
         Timer::after(HEALTH_CHECK_INTERVAL).await;
         if esp_wifi::wifi::wifi_state() != WifiState::StaConnected {
-            let _ = event_sender
+            event_sender
                 .try_send(ConnectionEvent::WiFiDisconnected)
                 .unwrap();
             info!("[NetMgr] WiFi disconnected");
         } else {
-            let _ = event_sender
+            event_sender
                 .try_send(ConnectionEvent::WiFiConnected)
                 .unwrap();
             info!("[NetMgr] WiFi is connected");

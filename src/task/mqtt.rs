@@ -22,6 +22,7 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
 static IS_WIFI: AtomicBool = AtomicBool::new(false);
 
+#[allow(clippy::uninlined_format_args)]
 #[embassy_executor::task]
 pub async fn mqtt_handler(
     stack: &'static Stack<'static>,
@@ -70,10 +71,10 @@ pub async fn mqtt_handler(
         }
 
         let certificates = Certificates {
-            ca_chain: X509::pem(concat!(include_str!("../../certs/crt.pem"), "\0").as_bytes()).ok(),
-            certificate: X509::pem(concat!(include_str!("../../certs/dvt.crt"), "\0").as_bytes())
+            ca_chain: X509::pem(concat!(include_str!("../../cert/crt.pem"), "\0").as_bytes()).ok(),
+            certificate: X509::pem(concat!(include_str!("../../cert/dvt.crt"), "\0").as_bytes())
                 .ok(),
-            private_key: X509::pem(concat!(include_str!("../../certs/dvt.key"), "\0").as_bytes())
+            private_key: X509::pem(concat!(include_str!("../../cert/dvt.key"), "\0").as_bytes())
                 .ok(),
             password: None,
         };
