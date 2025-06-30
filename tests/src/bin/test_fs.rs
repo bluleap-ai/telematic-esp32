@@ -156,6 +156,7 @@ impl<'a> FlashController<'a> {
         }
 
         match self.flash.read_data(address, buffer) {
+        match self.flash.read_data(address, buffer) {
             Ok(()) => {
                 info!(
                     "✓ Read {} bytes from address 0x{:08X}",
