@@ -7,26 +7,25 @@ use atat::{
 };
 
 use crate::cfg::net_cfg::*;
+use crate::net::atcmd::general::*;
 use crate::net::atcmd::response::*;
 use crate::net::atcmd::Urc;
 use crate::task::can::*;
 use crate::task::netmgr::ConnectionEvent;
-use crate::task::netmgr::ACTIVE_CONNECTION_CHAN;
-use crate::task::netmgr::CONN_EVENT_CHAN;
+use crate::task::netmgr::{ActiveConnection, ACTIVE_CONNECTION_CHAN_LTE, CONN_EVENT_CHAN};
 use crate::util::time::utc_date_to_unix_timestamp;
-use crate::{net::atcmd::general::*, task::can};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
-use embedded_can::Frame;
+// use embedded_can::Frame;
 use esp_hal::{
     gpio::Output,
     uart::{UartRx, UartTx},
     Async,
 };
-use esp_println::print;
+// use esp_println::print;
+use core::sync::atomic::{AtomicBool, Ordering};
 use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
-
 const REGISTERED_HOME: u8 = 1;
 const UNREGISTERED_SEARCHING: u8 = 2;
 const REGISTRATION_DENIED: u8 = 3;
@@ -41,7 +40,7 @@ pub struct TripData {
     longitude: f64,
     timestamp: u64,
 }
-
+static IS_LTE: AtomicBool = AtomicBool::new(false);
 #[derive(Debug)]
 enum State {
     ResetHardware,
@@ -60,7 +59,7 @@ enum State {
     MqttConnectBroker,
     MqttPublishData,
     ErrorConnection,
-    GetGPSData,
+    // GetGPSData,
     //Connected,
     //Disconnected,
 }
@@ -70,8 +69,16 @@ async fn handle_publish_mqtt_data(
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
     can_channel: &'static TwaiOutbox,
 ) -> bool {
-    // adding channel to receive connection events (wifi-data-come channel)
-    // if status is wifi and data come, then send data
+    if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_LTE.receiver().try_receive() {
+        IS_LTE.store(active_connection == ActiveConnection::Lte, Ordering::SeqCst);
+        info!("[LTE] Updated IS_LTE: {}", IS_LTE.load(Ordering::SeqCst));
+    }
+
+    // If LTE is not active, return false
+    if !IS_LTE.load(Ordering::SeqCst) {
+        info!("[LTE] LTE not active, skipping MQTT publish");
+        return true;
+    }
 
     let mut trip_topic: heapless::String<128> = heapless::String::new();
     let mut trip_payload: heapless::String<1024> = heapless::String::new();
@@ -88,7 +95,7 @@ async fn handle_publish_mqtt_data(
     // --- GPS Data ---
     let trip_result = client.send(&RetrieveGpsRmc).await;
 
-    let trip_success = match trip_result {
+    let _trip_success = match trip_result {
         Ok(res) => {
             info!("[LTE] GPS RMC data received: {res:?}");
 
@@ -247,122 +254,87 @@ pub async fn upload_mqtt_cert_files(
     let mut subscriber = urc_channel.subscribe().unwrap();
     let _ = client.send(&FileList).await.unwrap();
     let now = embassy_time::Instant::now();
-    loop {
+    while now.elapsed().as_secs() < 10 {
         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
         match subscriber.try_next_message_pure() {
-            Some(Urc::ListFile(file)) => {
-                log::info!("[Quectel] File: {file:?}");
-            }
-            Some(e) => {
-                error!("[Quectel] Unknown URC {e:?}");
-            }
-            None => {
-                info!("[Quectel] Waiting for response...");
-            }
-        }
-        if now.elapsed().as_secs() > 10 {
-            break;
+            Some(Urc::ListFile(file)) => log::info!("File: {file:?}"),
+            Some(e) => error!("Unknown URC {e:?}"),
+            None => info!("Waiting for response..."),
         }
     }
-    info!("[Quectel] remove CA_CRT path");
-    let _ = client
-        .send(&FileDel {
-            name: heapless::String::from_str("crt.pem").unwrap(),
-        })
-        .await;
-    info!("[Quectel] remove CLIENT_CRT path");
-    let _ = client
-        .send(&FileDel {
-            name: heapless::String::from_str("dvt.crt").unwrap(),
-        })
-        .await;
-    info!("[Quectel] remove CLIENT_KEY path");
-    let _ = client
-        .send(&FileDel {
-            name: heapless::String::from_str("dvt.key").unwrap(),
-        })
-        .await;
-    // Upload CA cert
-    info!("[Quectel] Upload MQTT certs to quectel");
-    let _ = raw_data.extend_from_slice(&ca_chain[0..1024]);
-    let _ = client
-        .send(&FileUpl {
-            name: heapless::String::from_str("crt.pem").unwrap(),
-            size: 2574,
-        })
-        .await;
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 1024,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&ca_chain[1024..2048]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 1024,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&ca_chain[2048..]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 526,
-        })
-        .await;
-    embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
-    // Upload client cert
-    let _ = client
-        .send(&FileUpl {
-            name: heapless::String::from_str("dvt.crt").unwrap(),
-            size: 1268,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&certificate[0..1024]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 1024,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&certificate[1024..]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 244,
-        })
-        .await;
-    embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
-    // Upload client key
-    let _ = client
-        .send(&FileUpl {
-            name: heapless::String::from_str("dvt.key").unwrap(),
-            size: 1678,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&private_key[0..1024]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 1024,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&private_key[1024..]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 654,
-        })
-        .await;
 
-    info!("[Quectel] set MQTTS configuration");
+    // Remove old certs
+    for name in ["crt.pem", "dvt.crt", "dvt.key"] {
+        let _ = client
+            .send(&FileDel {
+                name: heapless::String::from_str(name).unwrap(),
+            })
+            .await;
+        info!("Deleted old {name}");
+    }
+
+    // Upload helper
+    async fn upload_file(
+        client: &mut Client<'static, UartTx<'static, Async>, 1024>,
+        name: &str,
+        content: &[u8],
+        raw_data: &mut heapless::Vec<u8, 4096>,
+    ) -> bool {
+        //Sending file upload command to notify the modem about the file to be uploaded
+        let name_str = match heapless::String::from_str(name) {
+            Ok(s) => s,
+            Err(_) => {
+                error!("Heapless string overflow for file name: {name}");
+                return false;
+            }
+        };
+        //Notify the modem about the file to be uploaded
+        if let Err(e) = client
+            .send(&FileUpl {
+                name: name_str,
+                size: content.len() as u32,
+            })
+            .await
+        {
+            error!("FileUpl command failed: {e:?}");
+            return false;
+        }
+        //Uploading data payload in 1 Kib of chunks
+        for chunk in content.chunks(1024) {
+            raw_data.clear();
+            if raw_data.extend_from_slice(chunk).is_err() {
+                error!("Raw data buffer overflow");
+                return false;
+            };
+
+            if let Err(_e) = client
+                .send(&SendRawData {
+                    raw_data: raw_data.clone(),
+                    len: chunk.len(),
+                })
+                .await
+            {
+                error!("SendRawData command failed");
+                return false;
+            }
+        }
+
+        embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+        true
+    }
+
+    // Upload certs
+    info!("Uploading CA cert...");
+    upload_file(client, "crt.pem", ca_chain, &mut raw_data).await;
+
+    info!("Uploading client cert...");
+    upload_file(client, "dvt.crt", certificate, &mut raw_data).await;
+
+    info!("Uploading client key...");
+    upload_file(client, "dvt.key", private_key, &mut raw_data).await;
+
+    // Configure MQTTS
+    info!("Configuring MQTT over TLS...");
     let _ = client
         .send(&MqttConfig {
             name: heapless::String::from_str("recv/mode").unwrap(),
@@ -379,27 +351,21 @@ pub async fn upload_mqtt_cert_files(
             param_3: Some(2),
         })
         .await;
-    let _ = client
-        .send(&SslConfigCert {
-            name: heapless::String::from_str("cacert").unwrap(),
-            context_id: 2,
-            cert_path: Some(heapless::String::from_str("UFS:crt.pem").unwrap()),
-        })
-        .await;
-    let _ = client
-        .send(&SslConfigCert {
-            name: heapless::String::from_str("clientcert").unwrap(),
-            context_id: 2,
-            cert_path: Some(heapless::String::from_str("UFS:dvt.crt").unwrap()),
-        })
-        .await;
-    let _ = client
-        .send(&SslConfigCert {
-            name: heapless::String::from_str("clientkey").unwrap(),
-            context_id: 2,
-            cert_path: Some(heapless::String::from_str("UFS:dvt.key").unwrap()),
-        })
-        .await;
+
+    for (cfg_name, path) in [
+        ("cacert", "UFS:ca.crt"),
+        ("clientcert", "UFS:dvt.crt"),
+        ("clientkey", "UFS:dvt.key"),
+    ] {
+        let _ = client
+            .send(&SslConfigCert {
+                name: heapless::String::from_str(cfg_name).unwrap(),
+                context_id: 2,
+                cert_path: Some(heapless::String::from_str(path).unwrap()),
+            })
+            .await;
+    }
+
     let _ = client
         .send(&SslConfigOther {
             name: heapless::String::from_str("seclevel").unwrap(),
@@ -696,54 +662,8 @@ pub async fn quectel_tx_handler(
             State::EnableAssistGps => {
                 info!("[Quectel] Enable Assist GPS");
                 if check_result(client.send(&EnableAssistGpsFunc).await) {
-                    state = State::GetGPSData;
+                    state = State::SetModemFunctionality;
                 }
-            }
-            State::GetGPSData => {
-                info!("[Quectel] Retrieving GPS Data");
-
-                let trip_result = client.send(&RetrieveGpsRmc).await;
-
-                // still coding
-                let active_net = ACTIVE_CONNECTION_CHAN.receiver();
-                let connetion_event = active_net.try_receive();
-                info!("[Quectel] Waiting for active network connection {connetion_event:?}");
-
-                let trip_success = match trip_result {
-                    Ok(res) => {
-                        info!("[LTE] GPS RMC data received: {res:?}");
-
-                        let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
-                        let mut device_id = heapless::String::new();
-                        let mut trip_id = heapless::String::new();
-                        write!(&mut trip_id, "{MQTT_CLIENT_ID}").unwrap();
-                        write!(&mut device_id, "{MQTT_CLIENT_ID}").unwrap();
-
-                        let trip_data = TripData {
-                            device_id,
-                            trip_id,
-                            latitude: ((res.latitude as u64 / 100) as f64)
-                                + ((res.latitude % 100.0f64) / 60.0f64),
-                            longitude: ((res.longitude as u64 / 100) as f64)
-                                + ((res.longitude % 100.0f64) / 60.0f64),
-                            timestamp,
-                        };
-
-                        if gps_channel.try_send(trip_data.clone()).is_err() {
-                            error!("[Quectel] Failed to send TripData to channel");
-                            // add logic to handle this case
-                            // if wifi available, do no change state
-                            // if wifi not available, change state to SetModemFunctionality
-                        } else {
-                            info!("[Quectel] GPS data sent to channel: {trip_data:?}");
-                            state = State::ResetHardware;
-                        }
-                    }
-                    Err(e) => {
-                        warn!("[Quectel] Failed to retrieve GPS data: {e:?}");
-                        state = State::ResetHardware;
-                    }
-                };
             }
             State::SetModemFunctionality => {
                 info!("[Quectel] Set Modem Functionality");

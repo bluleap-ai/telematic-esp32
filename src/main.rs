@@ -62,6 +62,7 @@ async fn main(spawner: Spawner) -> ! {
         config.cpu_clock = CpuClock::max();
         config
     });
+    info!("Telematic started");
     esp_alloc::heap_allocator!(200 * 1024);
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let timg1 = TimerGroup::new(peripherals.TIMG1);
@@ -143,7 +144,7 @@ async fn main(spawner: Spawner) -> ! {
     let can = twai_config.start();
     static CHANNEL: StaticCell<TwaiOutbox> = StaticCell::new();
     let channel = &*CHANNEL.init(Channel::new());
-    let (can_rx, can_tx) = can.split();
+    let (can_rx, _can_tx) = can.split();
 
     let gps_channel = &*GPS_CHANNEL.init(Channel::new());
     spawner.spawn(can_receiver(can_rx, channel)).ok();

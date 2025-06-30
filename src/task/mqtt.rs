@@ -5,20 +5,22 @@ use embassy_net::{
 use embassy_time::{Duration, Timer};
 use esp_hal::peripherals::{RSA, SHA};
 use esp_mbedtls::{asynch::Session, Certificates, Mode, Tls, TlsVersion, X509};
-use esp_println::println;
+// use esp_println::println;
 use log::{error, info, warn};
 
 use crate::task::lte::TripData;
 use embassy_sync::channel::Channel;
 
+use crate::cfg::net_cfg::*;
 use crate::net::{dns::DnsBuilder, mqtt::MqttClient};
+use crate::task::can::TwaiOutbox;
+// use crate::task::netmgr::CONN_EVENT_CHAN;
+use crate::task::netmgr::{ActiveConnection, ACTIVE_CONNECTION_CHAN_NET};
 use core::fmt::Write;
+use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
-use crate::cfg::net_cfg::*;
-use crate::task::can::TwaiOutbox;
-use crate::task::netmgr::ConnectionEvent;
-use crate::task::netmgr::CONN_EVENT_CHAN;
+static IS_WIFI: AtomicBool = AtomicBool::new(false);
 
 #[embassy_executor::task]
 pub async fn mqtt_handler(
@@ -28,10 +30,20 @@ pub async fn mqtt_handler(
     mut sha: SHA,
     mut rsa: RSA,
 ) {
-    // No need to switch stacks, just use stack
     loop {
-        // adding channel to receive connection events (wifi-data-come channel)
-        // if status is wifi and data come, then send data
+        if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_NET.receiver().try_receive() {
+            IS_WIFI.store(
+                active_connection == ActiveConnection::WiFi,
+                Ordering::SeqCst,
+            );
+            info!("[MQTT] Updated IS_WIFI: {}", IS_WIFI.load(Ordering::SeqCst));
+        }
+
+        // Check if WiFi is active, wait if not
+        if !IS_WIFI.load(Ordering::SeqCst) {
+            Timer::after(Duration::from_millis(500)).await;
+            continue;
+        }
 
         // Ensure the stack is connected
         if !stack.is_link_up() {
@@ -58,7 +70,7 @@ pub async fn mqtt_handler(
         }
 
         let certificates = Certificates {
-            ca_chain: X509::pem(concat!(include_str!("../../certs/ca.crt"), "\0").as_bytes()).ok(),
+            ca_chain: X509::pem(concat!(include_str!("../../certs/crt.pem"), "\0").as_bytes()).ok(),
             certificate: X509::pem(concat!(include_str!("../../certs/dvt.crt"), "\0").as_bytes())
                 .ok(),
             private_key: X509::pem(concat!(include_str!("../../certs/dvt.key"), "\0").as_bytes())

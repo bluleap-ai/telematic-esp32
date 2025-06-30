@@ -50,7 +50,9 @@ pub static CONN_EVENT_CHAN: Channel<CriticalSectionRawMutex, ConnectionEvent, 16
 pub static CONN_STATUS_CHAN: Channel<CriticalSectionRawMutex, ConnectionStatus, 4> = Channel::new();
 pub static SWITCH_REQUEST_CHAN: Channel<CriticalSectionRawMutex, ActiveConnection, 4> =
     Channel::new();
-pub static ACTIVE_CONNECTION_CHAN: Channel<CriticalSectionRawMutex, ActiveConnection, 4> =
+pub static ACTIVE_CONNECTION_CHAN_NET: Channel<CriticalSectionRawMutex, ActiveConnection, 4> =
+    Channel::new();
+pub static ACTIVE_CONNECTION_CHAN_LTE: Channel<CriticalSectionRawMutex, ActiveConnection, 4> =
     Channel::new();
 
 const SWITCH_DEBOUNCE_TIME: Duration = Duration::from_secs(10);
@@ -65,11 +67,11 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
     let event_receiver = CONN_EVENT_CHAN.receiver();
     let status_sender = CONN_STATUS_CHAN.sender();
     let switch_receiver = SWITCH_REQUEST_CHAN.receiver();
-    let active_net_sender = ACTIVE_CONNECTION_CHAN.sender();
+    let active_net_sender = ACTIVE_CONNECTION_CHAN_NET.sender();
+    let active_lte_sender = ACTIVE_CONNECTION_CHAN_LTE.sender();
 
     // Start health monitoring tasks
     let health_sender = CONN_EVENT_CHAN.sender();
-    // let health_receiver = CONN_EVENT_CHAN.receiver();
     spawner.spawn(net_health_monitor(health_sender)).ok();
     spawner.spawn(lte_health_monitor(health_sender)).ok();
 
@@ -94,8 +96,12 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
                         status.wifi_available = false;
                         if status.active == ActiveConnection::WiFi {
                             if status.lte_available {
+                                info!("[NetMgr] Switching to LTE due to WiFi disconnect");
                                 perform_net_switch(&mut status, ActiveConnection::Lte).await;
                             } else {
+                                info!(
+                                    "[NetMgr] No LTE available, setting active connection to None"
+                                );
                                 status.active = ActiveConnection::None;
                             }
                         }
@@ -123,6 +129,7 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
                 // Notify others of status change
                 let _ = status_sender.try_send(status);
                 let _ = active_net_sender.try_send(status.active);
+                let _ = active_lte_sender.try_send(status.active); // Added for LTE
             }
             embassy_futures::select::Either::Second(_) => {
                 info!("[NetMgr] Health check timeout reached");
@@ -136,13 +143,13 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
                 perform_net_switch(&mut status, requested_connection).await;
                 let _ = status_sender.try_send(status);
                 let _ = active_net_sender.try_send(status.active);
+                let _ = active_lte_sender.try_send(status.active); // Added for LTE
             } else {
                 warn!("[NetMgr] Cannot switch to {requested_connection:?} - not available");
             }
         }
     }
 }
-
 #[embassy_executor::task]
 async fn net_health_monitor(
     event_sender: Sender<'static, CriticalSectionRawMutex, ConnectionEvent, 16>,
@@ -151,7 +158,7 @@ async fn net_health_monitor(
 
     loop {
         Timer::after(HEALTH_CHECK_INTERVAL).await;
-        if esp_wifi::wifi::wifi_state() != esp_wifi::wifi::WifiState::StaConnected {
+        if esp_wifi::wifi::wifi_state() != WifiState::StaConnected {
             let _ = event_sender
                 .try_send(ConnectionEvent::WiFiDisconnected)
                 .unwrap();
@@ -173,8 +180,8 @@ async fn lte_health_monitor(
 
     loop {
         Timer::after(HEALTH_CHECK_INTERVAL).await;
-        // Add logic to check LTE status and send events
-        // For example:
+        // Will be fix this code after quectel state machine refactor
+        // For now, we assume LTE is connected if the state is not None
         if !lte_is_connected() {
             let _ = event_sender.try_send(ConnectionEvent::LteDisconnected);
         }
@@ -183,6 +190,8 @@ async fn lte_health_monitor(
 
 fn lte_is_connected() -> bool {
     // Placeholder for actual LTE connection check logic
+    // Will be fix this code after quectel state machine refactor
+    // For now, we assume LTE is connected if the state is not None
     true
 }
 
