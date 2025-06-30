@@ -11,10 +11,6 @@
 **/net_cfg.rs
 
 # Ignore certificate files in certs directory
-**/crt.pem
-**/dvt.crt
-**/dvt.key
-
-certs/
-
-.cargo/config.toml
+cert/dvt.crt
+cert/dvt.key
+cert/ca.crt

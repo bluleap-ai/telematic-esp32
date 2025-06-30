@@ -529,7 +529,7 @@ pub async fn connect_mqtt_broker(
     // Create credentials with proper error handling
     let username = heapless::String::<64>::from_str(MQTT_USR_NAME)
         .map_err(|_| MqttConnectError::StringConversion)?;
-    let password = heapless::String::<64>::from_str(MQTT_USR_NAME) // Note: Same as username - is this intentional?
+    let password = heapless::String::<64>::from_str("f57f9bf3-07b3-4ba5-ae1f-bf6f579e346d") // Note: Same as username - is this intentional?
         .map_err(|_| MqttConnectError::StringConversion)?;
     let client_id = heapless::String::<23>::from_str(CLIENT_ID)
         .map_err(|_| MqttConnectError::StringConversion)?;
@@ -605,7 +605,7 @@ pub async fn quectel_tx_handler(
 ) -> ! {
     let mut state: State = State::ResetHardware;
     let mut is_connected = false;
-    let ca_chain = include_str!("../../certs/crt.pem").as_bytes();
+    let ca_chain = include_str!("../../certs/ca.crt").as_bytes();
     let certificate = include_str!("../../certs/dvt.crt").as_bytes();
     let private_key = include_str!("../../certs/dvt.key").as_bytes();
 

@@ -49,6 +49,8 @@ pub async fn mqtt_handler(
         if !stack.is_link_up() {
             Timer::after(Duration::from_millis(500)).await;
             continue;
+        } else {
+            Timer::after(Duration::from_millis(3000)).await;
         }
 
         // Perform MQTT operations using the Wi-Fi stack
@@ -70,7 +72,7 @@ pub async fn mqtt_handler(
         }
 
         let certificates = Certificates {
-            ca_chain: X509::pem(concat!(include_str!("../../certs/crt.pem"), "\0").as_bytes()).ok(),
+            ca_chain: X509::pem(concat!(include_str!("../../certs/ca.crt"), "\0").as_bytes()).ok(),
             certificate: X509::pem(concat!(include_str!("../../certs/dvt.crt"), "\0").as_bytes())
                 .ok(),
             private_key: X509::pem(concat!(include_str!("../../certs/dvt.key"), "\0").as_bytes())
