@@ -35,7 +35,7 @@ use static_cell::StaticCell;
 use task::can::*;
 use task::lte::TripData;
 use task::lte::*;
-use task::mqtt::*;
+// use task::mqtt::*;
 use task::netmgr::net_manager_task;
 #[cfg(feature = "ota")]
 use task::ota::ota_handler;
@@ -188,23 +188,22 @@ async fn main(spawner: Spawner) -> ! {
     Timer::after(Duration::from_secs(5)).await;
     quectel.disable_echo_mode().await.unwrap();
     quectel.get_model_id().await.unwrap();
-    quectel.get_netword_signal_quality().await.unwrap();
     quectel.enable_gps().await.unwrap();
     quectel.enable_assist_gps().await.unwrap();
 
     loop {
-        match quectel.get_gps().await {
-            Ok(gps) => {
-                info!("[Main] GPS: {:?}", gps);
-                info!(
-                    "[Main] GPS - Latitude: {}, Longitude: {}, Timestamp: {}",
-                    gps.latitude, gps.longitude, gps.timestamp
-                );
-            }
-            Err(e) => {
-                info!("[Main] Failed to get GPS data: {:?}", e);
-            }
-        }
+        // match quectel.get_gps().await {
+        //     Ok(gps) => {
+        //         info!("[Main] GPS: {:?}", gps);
+        //         info!(
+        //             "[Main] GPS - Latitude: {}, Longitude: {}, Timestamp: {}",
+        //             gps.latitude, gps.longitude, gps.timestamp
+        //         );
+        //     }
+        //     Err(e) => {
+        //         info!("[Main] Failed to get GPS data: {:?}", e);
+        //     }
+        // }
         Timer::after(Duration::from_secs(5)).await;
         // Timer::after(Duration::from_millis(10)).await;
 

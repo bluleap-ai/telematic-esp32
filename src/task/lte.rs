@@ -32,6 +32,13 @@ const REGISTRATION_DENIED: u8 = 3;
 const REGISTRATION_FAILED: u8 = 4;
 const REGISTERED_ROAMING: u8 = 5;
 
+#[derive(Debug, PartialEq)]
+pub enum MqttConnectError {
+    CommandFailed,
+    StringConversion,
+    Timeout,
+    ModemError(u8),
+}
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TripData {
     device_id: heapless::String<36>,
@@ -63,7 +70,7 @@ enum State {
     //Connected,
     //Disconnected,
 }
-async fn handle_publish_mqtt_data(
+pub async fn handle_publish_mqtt_data(
     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
     mqtt_client_id: &str,
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
@@ -450,14 +457,6 @@ pub async fn check_network_registration(
     // Timeout reached without successful registration
     error!("[Quectel] Network registration timed out");
     false
-}
-
-#[derive(Debug, PartialEq)]
-pub enum MqttConnectError {
-    CommandFailed,
-    StringConversion,
-    Timeout,
-    ModemError(u8),
 }
 
 pub async fn open_mqtt_connection(
