@@ -145,7 +145,6 @@ async fn main(spawner: Spawner) -> ! {
     .into_async();
     twai_config.set_filter(
         const { twai::filter::SingleExtendedFilter::new(b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", b"x") },
-        const { twai::filter::SingleExtendedFilter::new(b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", b"x") },
     );
     let can = twai_config.start();
     static CHANNEL: StaticCell<TwaiOutbox> = StaticCell::new();
