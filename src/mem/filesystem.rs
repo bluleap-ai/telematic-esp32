@@ -680,6 +680,69 @@ impl<'a> FlashController<'a> {
         }
     }
 
+    pub async fn list_files(
+        &mut self,
+        region: FlashRegion,
+    ) -> Result<Vec<DirEntry, MAX_FILES>, FsError> {
+        let mut files = Vec::<DirEntry, MAX_FILES>::new();
+        let info = region.info();
+        let mut cur = 0;
+        let page_size = self.flash.page_size() as u32;
+
+        info!("Listing files in region {:?}", region);
+
+        while cur < info.size {
+            let addr = info.start + cur;
+
+            let mut len_buf = [0u8; 1];
+            self.flash
+                .read_data(addr, &mut len_buf)
+                .await
+                .map_err(FsError::FlashError)?;
+            let name_len = len_buf[0] as usize;
+
+            if name_len == 0xFF {
+                info!("End of directory at 0x{:08X}", addr);
+                break;
+            }
+
+            if name_len == 0 || name_len > MAX_NAME {
+                error!("Invalid name_len {} at 0x{:08X}", name_len, addr);
+                return Err(FsError::InvalidAddress);
+            }
+
+            let mut name_buf = [0u8; MAX_NAME];
+            self.flash
+                .read_data(addr + 1, &mut name_buf[..name_len])
+                .await
+                .map_err(FsError::FlashError)?;
+            let name = core::str::from_utf8(&name_buf[..name_len])
+                .unwrap_or("<invalid>")
+                .to_string();
+
+            let mut size_buf = [0u8; 4];
+            let size_addr = addr + 1 + name_len as u32;
+            self.flash
+                .read_data(size_addr, &mut size_buf)
+                .await
+                .map_err(FsError::FlashError)?;
+            let data_len = u32::from_le_bytes(size_buf);
+
+            let entry = DirEntry {
+                name_len: name_len as u8,
+                name: heapless::String::from(name),
+                offset: addr,
+                len: data_len,
+            };
+            files.push(entry).map_err(|_| FsError::FileTooLarge)?;
+
+            cur += 1 + name_len as u32 + 4 + data_len;
+            cur = (cur + page_size - 1) & !(page_size - 1);
+        }
+
+        Ok(files)
+    }
+
     pub async fn get_flash_info(&self) -> (u32, usize, usize) {
         (
             self.flash.capacity(),
