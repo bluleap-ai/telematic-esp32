@@ -33,13 +33,13 @@ use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
 use log::info;
 use static_cell::StaticCell;
 use task::can::*;
-use task::lte::TripData;
-use task::lte::*;
-// use task::mqtt::*;
+// use task::lte::TripData;
+// use task::lte::*;
+use task::mqtt::*;
 use task::netmgr::net_manager_task;
 #[cfg(feature = "ota")]
 use task::ota::ota_handler;
-use task::quectel::Quectel;
+use task::quectel::*;
 use task::wifi::*;
 pub type GpsOutbox = Channel<NoopRawMutex, TripData, 8>;
 static GPS_CHANNEL: StaticCell<GpsOutbox> = StaticCell::new();
@@ -60,7 +60,6 @@ async fn main(spawner: Spawner) -> ! {
         config.cpu_clock = CpuClock::max();
         config
     });
-    info!("Telematic started");
     info!("Telematic started");
     esp_alloc::heap_allocator!(200 * 1024);
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -153,17 +152,44 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(can_receiver(can_rx, channel)).unwrap();
     spawner.spawn(connection(controller)).unwrap();
     spawner.spawn(net_task(runner)).unwrap();
-    // spawner
-    //     .spawn(mqtt_handler(
-    //         stack,
-    //         channel,
-    //         gps_channel,
-    //         peripherals.SHA,
-    //         peripherals.RSA,
-    //     ))
-    //     .unwrap();
+    spawner
+        .spawn(mqtt_handler(
+            stack,
+            channel,
+            gps_channel,
+            peripherals.SHA,
+            peripherals.RSA,
+        ))
+        .unwrap();
 
     spawner.spawn(net_manager_task(spawner)).unwrap();
+
+    // ====================================
+    // === Spawn RX handler Quectel ===
+    // ====================================
+    spawner.spawn(quectel_rx_handler(ingress, uart_rx)).ok();
+
+    // ====================================
+    // === Quectel flow API driver ===
+    // ====================================
+    let mut quectel = Quectel::new(client, quectel_pen_pin, quectel_dtr_pin, &URC_CHANNEL);
+
+    if let Err(e) = quectel.disable_echo_mode().await {
+        info!("[main] Failed to disable echo mode: {:?}", e);
+        // Handle error (e.g., retry, reset, or enter error state)
+    }
+    if let Err(e) = quectel.check_network_registration().await {
+        info!("[main] Failed to get network reg: {:?}", e);
+        // Handle error
+    }
+    if let Err(e) = quectel.enable_gps().await {
+        info!("[main] Failed to enable GPS: {:?}", e);
+        // Handle error
+    }
+    if let Err(e) = quectel.enable_assist_gps().await {
+        info!("[main] Failed to enable assist GPS: {:?}", e);
+        // Handle error
+    }
 
     #[cfg(feature = "ota")]
     //wait until wifi connected
@@ -177,38 +203,9 @@ async fn main(spawner: Spawner) -> ! {
         spawner.spawn(ota_handler(spawner, trng, stack)).unwrap();
     }
 
-    // ====================================
-    // === Spawn RX handler Quectel ===
-    // ====================================
-    spawner.spawn(quectel_rx_handler(ingress, uart_rx)).ok();
-    // ====================================
-    // === Quectel flow API driver ===
-    // ====================================
-    let mut quectel = Quectel::new(client, quectel_pen_pin, quectel_dtr_pin, &URC_CHANNEL);
-
-    quectel.reset_hardware().await;
-    Timer::after(Duration::from_secs(5)).await;
-    quectel.disable_echo_mode().await.unwrap();
-    quectel.get_model_id().await.unwrap();
-    quectel.enable_gps().await.unwrap();
-    quectel.enable_assist_gps().await.unwrap();
-
+    // WDG feed task
     loop {
-        // match quectel.get_gps().await {
-        //     Ok(gps) => {
-        //         info!("[Main] GPS: {:?}", gps);
-        //         info!(
-        //             "[Main] GPS - Latitude: {}, Longitude: {}, Timestamp: {}",
-        //             gps.latitude, gps.longitude, gps.timestamp
-        //         );
-        //     }
-        //     Err(e) => {
-        //         info!("[Main] Failed to get GPS data: {:?}", e);
-        //     }
-        // }
-        Timer::after(Duration::from_secs(5)).await;
-        // Timer::after(Duration::from_millis(10)).await;
-
+        Timer::after_secs(2).await;
         #[cfg(feature = "wdg")]
         rtc.rwdt.feed();
     }

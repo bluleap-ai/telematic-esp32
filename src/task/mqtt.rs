@@ -8,8 +8,10 @@ use esp_mbedtls::{asynch::Session, Certificates, Mode, Tls, TlsVersion, X509};
 // use esp_println::println;
 use log::{error, info, warn};
 
-use crate::task::lte::TripData;
+// use crate::task::lte::TripData;
 use embassy_sync::channel::Channel;
+
+use crate::task::quectel::*;
 
 use crate::cfg::net_cfg::*;
 use crate::net::{dns::DnsBuilder, mqtt::MqttClient};
@@ -73,10 +75,10 @@ pub async fn mqtt_handler(
         }
 
         let certificates = Certificates {
-            ca_chain: X509::pem(concat!(include_str!("../../cert/crt.pem"), "\0").as_bytes()).ok(),
-            certificate: X509::pem(concat!(include_str!("../../cert/dvt.crt"), "\0").as_bytes())
+            ca_chain: X509::pem(concat!(include_str!("../../certx/crt.pem"), "\0").as_bytes()).ok(),
+            certificate: X509::pem(concat!(include_str!("../../certx/dvt.crt"), "\0").as_bytes())
                 .ok(),
-            private_key: X509::pem(concat!(include_str!("../../cert/dvt.key"), "\0").as_bytes())
+            private_key: X509::pem(concat!(include_str!("../../certx/dvt.key"), "\0").as_bytes())
                 .ok(),
             password: None,
         };

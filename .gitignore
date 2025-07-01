@@ -8,7 +8,11 @@
 **/log.txt
 
 # Ignore certificate files in certs directory
+
+certx/
+certx/*
+
 cert/dvt.crt
 cert/dvt.key
 cert/ca.crt
-
+cert/

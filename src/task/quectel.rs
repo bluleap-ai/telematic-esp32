@@ -24,14 +24,14 @@ use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
 
 // Network registration status constants
-const REGISTERED_HOME: u8 = 1;
-const REGISTERED_ROAMING: u8 = 5;
-const UNREGISTERED_SEARCHING: u8 = 2;
-const REGISTRATION_DENIED: u8 = 3;
-const REGISTRATION_FAILED: u8 = 4;
+const REGISTERED_HOME: u8 = 1; // Modem registered on home network
+const REGISTERED_ROAMING: u8 = 5; // Modem registered on roaming network
+const UNREGISTERED_SEARCHING: u8 = 2; // Modem searching for network
+const REGISTRATION_DENIED: u8 = 3; // Network registration denied
+const REGISTRATION_FAILED: u8 = 4; // Network registration failed
 
 // Atomic boolean for tracking LTE connection status
-static IS_LTE: AtomicBool = AtomicBool::new(false);
+pub static IS_LTE: AtomicBool = AtomicBool::new(false);
 
 /// Error types for Quectel modem operations.
 #[derive(Debug)]
@@ -49,57 +49,91 @@ pub enum QuectelError {
 /// Error types for MQTT connection operations.
 #[derive(Debug, PartialEq)]
 pub enum MqttConnectError {
+    /// Indicates a failure in executing an MQTT command.
     CommandFailed,
+    /// Indicates a failure to convert data to a string.
     StringConversion,
+    /// Indicates a timeout during MQTT connection.
     Timeout,
+    /// Indicates a modem-specific error with an error code.
     ModemError(u8),
 }
 
 /// Data structure for GPS-related trip data.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TripData {
+    /// Device identifier (up to 36 characters).
     device_id: String<36>,
+    /// Trip identifier (up to 36 characters).
     trip_id: String<36>,
+    /// Latitude in decimal degrees.
     latitude: f64,
+    /// Longitude in decimal degrees.
     longitude: f64,
+    /// Unix timestamp of the GPS data.
     timestamp: u64,
 }
 
-/// Placeholder struct for CAN frame data (replace with actual definition from crate::task::can).
+/// Placeholder struct for CAN frame data.
+/// Note: This is a temporary definition; replace with actual definition from `crate::task::can`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CanFrame {
+    /// CAN frame identifier.
     pub id: u32,
+    /// Length of the data in the CAN frame.
     pub len: u8,
+    /// Data payload of the CAN frame (up to 8 bytes).
     pub data: [u8; 8],
 }
 
 /// States for the Quectel modem state machine.
 #[derive(Debug)]
 pub enum State {
+    /// Resets the modem hardware.
     ResetHardware,
+    /// Disables echo mode on the modem.
     DisableEchoMode,
+    /// Retrieves the modem's model ID.
     GetModelId,
+    /// Retrieves the modem's software version.
     GetSoftwareVersion,
+    /// Checks the SIM card status.
     GetSimCardStatus,
+    /// Retrieves the network signal quality.
     GetNetworkSignalQuality,
+    /// Retrieves network information.
     GetNetworkInfo,
+    /// Enables GPS functionality.
     EnableGps,
+    /// Enables assisted GPS functionality.
     EnableAssistGps,
+    /// Sets the modem's functionality level.
     SetModemFunctionality,
+    /// Uploads MQTT certificates.
     UploadMqttCert,
+    /// Checks network registration status.
     CheckNetworkRegistration,
+    /// Opens an MQTT connection.
     MqttOpenConnection,
+    /// Connects to the MQTT broker.
     MqttConnectBroker,
+    /// Publishes GPS and CAN data to the MQTT broker.
     MqttPublishData,
+    /// Handles error recovery.
     ErrorConnection,
 }
 
 /// Quectel modem driver for managing communication and GPS functionality.
 pub struct Quectel {
+    /// AT command client for sending commands to the modem.
     client: Client<'static, UartTx<'static, Async>, 1024>,
+    /// GPIO output pin for controlling modem power.
     pen: Output<'static>,
+    /// GPIO output pin for controlling modem data terminal ready (DTR) signal.
     dtr: Output<'static>,
+    /// Channel for handling unsolicited result codes (URCs) from the modem.
     urc_channel: &'static UrcChannel<Urc, 128, 3>,
+    /// Tracks whether the modem is connected to the network.
     is_connected: bool,
 }
 
@@ -143,8 +177,8 @@ impl Quectel {
     /// * `ca_chain` - The CA certificate chain for MQTT authentication.
     /// * `certificate` - The client certificate for MQTT authentication.
     /// * `private_key` - The client private key for MQTT authentication.
-    /// * `gps_channel` - Channel for receiving GPS-related TripData.
-    /// * `can_channel` - Channel for receiving CAN-related TripData (TWAI outbox).
+    /// * `gps_channel` - Channel for receiving GPS-related `TripData`.
+    /// * `can_channel` - Channel for receiving CAN-related `TripData` (TWAI outbox).
     ///
     /// # Returns
     ///
@@ -271,6 +305,7 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` on successful reset.
+    /// * `Err(QuectelError::CommandFailed)` if the reset fails.
     pub async fn reset_hardware(&mut self) -> Result<(), QuectelError> {
         info!("[Quectel] Reset Hardware");
         self.pen.set_low();
@@ -279,6 +314,7 @@ impl Quectel {
         Timer::after(Duration::from_secs(5)).await;
         Ok(())
     }
+
     /// Disables echo mode on the modem.
     ///
     /// Sends an AT command to disable command echoing, preventing the modem from repeating
@@ -364,6 +400,7 @@ impl Quectel {
             Ok(())
         }
     }
+
     /// Retrieves network information.
     ///
     /// Sends an AT command to query network-related information.
@@ -440,7 +477,7 @@ impl Quectel {
 
     /// Uploads MQTT certificates to the modem.
     ///
-    /// Uploads the CA chain, certificate, and private key for secure MQTT communication.
+    /// Uploads the CA chain, client certificate, and private key for secure MQTT communication.
     ///
     /// # Arguments
     ///
@@ -478,10 +515,11 @@ impl Quectel {
     /// Checks network registration status.
     ///
     /// Verifies if the modem is registered to the network and updates the connection state.
+    /// Sends connection events (`LteRegistered` or `LteUnregistered`) via `CONN_EVENT_CHAN`.
     ///
     /// # Returns
     ///
-    /// * `Ok(())` if the modem is registered.
+    /// * `Ok(())` if the modem is registered (home or roaming).
     /// * `Err(QuectelError::NetworkRegistrationFailed)` if registration fails or times out.
     pub async fn check_network_registration(&mut self) -> Result<(), QuectelError> {
         info!("[Quectel] Check Network Registration");
@@ -501,9 +539,9 @@ impl Quectel {
         }
     }
 
-    /// Opens an MQTT connection.
+    /// Opens an MQTT connection to the broker.
     ///
-    /// Initiates an MQTT connection to the broker.
+    /// Initiates an MQTT connection using the configured server and port.
     ///
     /// # Returns
     ///
@@ -523,7 +561,8 @@ impl Quectel {
 
     /// Connects to the MQTT broker.
     ///
-    /// Establishes a connection to the MQTT broker and updates the connection state.
+    /// Establishes a connection to the MQTT broker using the provided credentials and updates
+    /// the connection state by sending `LteConnected` or `LteDisconnected` events via `CONN_EVENT_CHAN`.
     ///
     /// # Returns
     ///
@@ -543,19 +582,19 @@ impl Quectel {
         Ok(())
     }
 
-    /// Publishes data to the MQTT broker.
-    ///
     /// Publishes GPS and CAN data to the MQTT broker.
+    ///
+    /// Publishes GPS (`TripData`) and CAN (`CanFrame`) data to their respective MQTT topics.
     ///
     /// # Arguments
     ///
-    /// * `mqtt_client_id` - The MQTT client identifier.
-    /// * `gps_channel` - Channel for receiving GPS-related TripData.
-    /// * `can_channel` - Channel for receiving CAN-related TripData (TWAI outbox).
+    /// * `mqtt_client_id` - The MQTT client identifier for topic construction.
+    /// * `gps_channel` - Channel for receiving GPS-related `TripData`.
+    /// * `can_channel` - Channel for receiving CAN-related `TripData` (TWAI outbox).
     ///
     /// # Returns
     ///
-    /// * `Ok(())` if the data is published successfully.
+    /// * `Ok(())` if both GPS and CAN data are published successfully.
     /// * `Err(QuectelError::MqttPublishFailed)` if publishing fails.
     pub async fn mqtt_publish_data(
         &mut self,
@@ -577,7 +616,8 @@ impl Quectel {
 
     /// Handles error recovery by resetting the modem.
     ///
-    /// Updates the connection state and initiates a hardware reset after a 5-second delay.
+    /// Updates the connection state by sending an `LteDisconnected` event if connected,
+    /// then initiates a hardware reset after a 5-second delay.
     ///
     /// # Returns
     ///
@@ -594,6 +634,22 @@ impl Quectel {
 }
 
 /// Uploads MQTT certificate files to the modem.
+///
+/// Deletes existing certificates, uploads new CA chain, client certificate, and private key,
+/// and configures MQTT over TLS settings.
+///
+/// # Arguments
+///
+/// * `client` - The AT command client for sending commands to the modem.
+/// * `urc_channel` - Channel for handling unsolicited result codes (URCs).
+/// * `ca_chain` - The CA certificate chain as a byte slice.
+/// * `certificate` - The client certificate as a byte slice.
+/// * `private_key` - The client private key as a byte slice.
+///
+/// # Returns
+///
+/// * `true` if the upload and configuration succeed.
+/// * `false` if any step fails (e.g., file upload or configuration errors).
 pub async fn upload_mqtt_cert_files(
     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
     urc_channel: &'static UrcChannel<Urc, 128, 3>,
@@ -601,11 +657,13 @@ pub async fn upload_mqtt_cert_files(
     certificate: &[u8],
     private_key: &[u8],
 ) -> bool {
+    // Buffer for raw data during file upload
     let mut raw_data = heapless::Vec::<u8, 4096>::new();
     raw_data.clear();
     let mut subscriber = urc_channel.subscribe().unwrap();
     let _ = client.send(&FileList).await.unwrap();
     let now = Instant::now();
+    // Check for file list response for up to 10 seconds
     while now.elapsed().as_secs() < 10 {
         Timer::after(Duration::from_secs(1)).await;
         match subscriber.try_next_message_pure() {
@@ -615,7 +673,7 @@ pub async fn upload_mqtt_cert_files(
         }
     }
 
-    // Remove old certs
+    // Remove old certificates
     for name in ["crt.pem", "dvt.crt", "dvt.key"] {
         let _ = client
             .send(&FileDel {
@@ -625,14 +683,14 @@ pub async fn upload_mqtt_cert_files(
         info!("Deleted old {name}");
     }
 
-    // Upload helper
+    // Helper function to upload a single file
     async fn upload_file(
         client: &mut Client<'static, UartTx<'static, Async>, 1024>,
         name: &str,
         content: &[u8],
         raw_data: &mut heapless::Vec<u8, 4096>,
     ) -> bool {
-        // Sending file upload command to notify the modem about the file to be uploaded
+        // Convert file name to heapless string
         let name_str = match String::from_str(name) {
             Ok(s) => s,
             Err(_) => {
@@ -651,14 +709,13 @@ pub async fn upload_mqtt_cert_files(
             error!("FileUpl command failed: {e:?}");
             return false;
         }
-        // Uploading data payload in 1 Kib of chunks
+        // Upload data in 1 KiB chunks
         for chunk in content.chunks(1024) {
             raw_data.clear();
             if raw_data.extend_from_slice(chunk).is_err() {
                 error!("Raw data buffer overflow");
                 return false;
             };
-
             if let Err(_e) = client
                 .send(&SendRawData {
                     raw_data: raw_data.clone(),
@@ -670,22 +727,29 @@ pub async fn upload_mqtt_cert_files(
                 return false;
             }
         }
-
         Timer::after(Duration::from_secs(1)).await;
         true
     }
 
-    // Upload certs
+    // Upload CA certificate
     info!("Uploading CA cert...");
-    upload_file(client, "crt.pem", ca_chain, &mut raw_data).await;
+    if !upload_file(client, "crt.pem", ca_chain, &mut raw_data).await {
+        return false;
+    }
 
+    // Upload client certificate
     info!("Uploading client cert...");
-    upload_file(client, "dvt.crt", certificate, &mut raw_data).await;
+    if !upload_file(client, "dvt.crt", certificate, &mut raw_data).await {
+        return false;
+    }
 
+    // Upload client private key
     info!("Uploading client key...");
-    upload_file(client, "dvt.key", private_key, &mut raw_data).await;
+    if !upload_file(client, "dvt.key", private_key, &mut raw_data).await {
+        return false;
+    }
 
-    // Configure MQTTS
+    // Configure MQTT over TLS
     info!("Configuring MQTT over TLS...");
     let _ = client
         .send(&MqttConfig {
@@ -704,6 +768,7 @@ pub async fn upload_mqtt_cert_files(
         })
         .await;
 
+    // Configure certificate paths
     for (cfg_name, path) in [
         ("cacert", "UFS:ca.crt"),
         ("clientcert", "UFS:dvt.crt"),
@@ -718,6 +783,7 @@ pub async fn upload_mqtt_cert_files(
             .await;
     }
 
+    // Configure SSL settings
     let _ = client
         .send(&SslConfigOther {
             name: String::from_str("seclevel").unwrap(),
@@ -753,6 +819,18 @@ pub async fn upload_mqtt_cert_files(
 }
 
 /// Checks the network registration status of the modem.
+///
+/// Polls the modem for up to 30 seconds to verify network registration status.
+/// Logs the status and returns whether registration was successful.
+///
+/// # Arguments
+///
+/// * `client` - The AT command client for sending commands to the modem.
+///
+/// # Returns
+///
+/// * `true` if the modem is registered (home or roaming).
+/// * `false` if registration fails, is denied, or times out.
 pub async fn check_network_registration(
     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
 ) -> bool {
@@ -763,7 +841,6 @@ pub async fn check_network_registration(
         match client.send(&GetEPSNetworkRegistrationStatus {}).await {
             Ok(status) => {
                 log::info!("[Quectel] EPS network registration status: {status:?}");
-
                 match status.stat {
                     REGISTERED_HOME => {
                         let elapsed = start_time.elapsed().as_secs();
@@ -771,7 +848,7 @@ pub async fn check_network_registration(
                         return true; // Successfully registered
                     }
                     UNREGISTERED_SEARCHING => {
-                        esp_println::print!("."); // Indicating ongoing search
+                        esp_println::print!("."); // Indicate ongoing search
                         Timer::after(Duration::from_secs(1)).await;
                     }
                     REGISTRATION_DENIED => {
@@ -806,6 +883,18 @@ pub async fn check_network_registration(
 }
 
 /// Opens an MQTT connection to the broker.
+///
+/// Sends an MQTT open command and waits for a response via the URC channel for up to 30 seconds.
+///
+/// # Arguments
+///
+/// * `client` - The AT command client for sending commands to the modem.
+/// * `urc_channel` - Channel for handling unsolicited result codes (URCs).
+///
+/// # Returns
+///
+/// * `Ok(())` if the connection is opened successfully.
+/// * `Err(MqttConnectError)` if the command fails, times out, or the modem reports an error.
 pub async fn open_mqtt_connection(
     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
     urc_channel: &'static UrcChannel<Urc, 128, 3>,
@@ -834,7 +923,7 @@ pub async fn open_mqtt_connection(
     const TIMEOUT: Duration = Duration::from_secs(30);
 
     loop {
-        // Check timeout first
+        // Check timeout
         if start.elapsed() >= TIMEOUT {
             error!("[Quectel] MQTT open timed out");
             return Err(MqttConnectError::Timeout);
@@ -865,6 +954,19 @@ pub async fn open_mqtt_connection(
 }
 
 /// Connects to the MQTT broker.
+///
+/// Attempts to connect to the MQTT broker with up to 3 retries, using the provided credentials.
+/// Waits for a connection acknowledgment for up to 30 seconds.
+///
+/// # Arguments
+///
+/// * `client` - The AT command client for sending commands to the modem.
+/// * `urc_channel` - Channel for handling unsolicited result codes (URCs).
+///
+/// # Returns
+///
+/// * `Ok(())` if the connection is established.
+/// * `Err(MqttConnectError)` if the command fails, times out, or the modem reports an error.
 pub async fn connect_mqtt_broker(
     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
     urc_channel: &'static UrcChannel<Urc, 128, 3>,
@@ -876,7 +978,7 @@ pub async fn connect_mqtt_broker(
     // Create credentials with proper error handling
     let username =
         String::<64>::from_str(MQTT_USR_NAME).map_err(|_| MqttConnectError::StringConversion)?;
-    let password = String::<64>::from_str(MQTT_USR_NAME) // Note: Same as username - is this intentional?
+    let password = String::<64>::from_str(MQTT_USR_NAME) // Note: Using same value as username
         .map_err(|_| MqttConnectError::StringConversion)?;
     let client_id =
         String::<23>::from_str(CLIENT_ID).map_err(|_| MqttConnectError::StringConversion)?;
@@ -884,7 +986,6 @@ pub async fn connect_mqtt_broker(
     // Send connect command with retries
     for attempt in 1..=MAX_RETRIES {
         info!("[Quectel] MQTT connect attempt {attempt}/{MAX_RETRIES}");
-
         match client
             .send(&MqttConnect {
                 tcp_connect_id: 0,
@@ -906,7 +1007,7 @@ pub async fn connect_mqtt_broker(
         }
     }
 
-    // Wait for connection acknowledgement
+    // Wait for connection acknowledgment
     let mut subscriber = urc_channel
         .subscribe()
         .map_err(|_| MqttConnectError::CommandFailed)?;
@@ -942,18 +1043,34 @@ pub async fn connect_mqtt_broker(
 }
 
 /// Publishes GPS and CAN data to the MQTT broker.
+///
+/// Checks LTE connection status and, if active, retrieves GPS data via `RetrieveGpsRmc` and
+/// CAN data from `can_channel`. Serializes the data to JSON and publishes to MQTT topics.
+///
+/// # Arguments
+///
+/// * `client` - The AT command client for sending commands to the modem.
+/// * `mqtt_client_id` - The MQTT client identifier for topic construction.
+/// * `gps_channel` - Channel for sending GPS-related `TripData`.
+/// * `can_channel` - Channel for receiving CAN-related `CanFrame` data.
+///
+/// # Returns
+///
+/// * `true` if both GPS and CAN data are published successfully or if LTE is inactive.
+/// * `false` if serialization or publishing fails due to buffer overflow or AT command errors.
 pub async fn handle_publish_mqtt_data(
     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
     mqtt_client_id: &str,
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
     can_channel: &'static TwaiOutbox,
 ) -> bool {
+    // Check and update LTE connection status
     if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_LTE.receiver().try_receive() {
         IS_LTE.store(active_connection == ActiveConnection::Lte, Ordering::SeqCst);
         info!("[LTE] Updated IS_LTE: {}", IS_LTE.load(Ordering::SeqCst));
     }
 
-    // If LTE is not active, return true to avoid error state
+    // Skip publishing if LTE is not active
     if !IS_LTE.load(Ordering::SeqCst) {
         info!("[LTE] LTE not active, skipping MQTT publish");
         return true;
@@ -965,6 +1082,7 @@ pub async fn handle_publish_mqtt_data(
     let mut is_gps_success = false;
     let mut is_can_success = false;
 
+    // Construct GPS topic
     writeln!(
         &mut trip_topic,
         "channels/{mqtt_client_id}/messages/client/trip"
@@ -977,13 +1095,14 @@ pub async fn handle_publish_mqtt_data(
     match trip_result {
         Ok(res) => {
             info!("[LTE] GPS RMC data received: {res:?}");
-
+            // Convert UTC date and time to Unix timestamp
             let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
             let mut device_id = String::new();
             let mut trip_id = String::new();
             write!(&mut trip_id, "{mqtt_client_id}").unwrap();
             write!(&mut device_id, "{mqtt_client_id}").unwrap();
 
+            // Create TripData with converted coordinates
             let trip_data = TripData {
                 device_id,
                 trip_id,
@@ -994,6 +1113,7 @@ pub async fn handle_publish_mqtt_data(
                 timestamp,
             };
 
+            // Send TripData to channel
             if gps_channel.try_send(trip_data.clone()).is_err() {
                 error!("[LTE] Failed to send TripData to channel");
             } else {
@@ -1046,14 +1166,14 @@ pub async fn handle_publish_mqtt_data(
 
     if let Ok(frame) = can_channel.try_receive() {
         info!("CAN data from LTE");
-
-        // Prepare CAN topic
+        // Create CanFrame from received data
         let can_data = CanFrame {
             id: frame.id,
             len: frame.len,
             data: frame.data,
         };
 
+        // Construct CAN topic
         writeln!(
             &mut can_topic,
             "channels/{mqtt_client_id}/messages/client/can"
@@ -1098,16 +1218,18 @@ pub async fn handle_publish_mqtt_data(
     is_can_success && is_gps_success
 }
 
-/// Task for handling incoming data from the modem's UART interface.
-#[embassy_executor::task]
-pub async fn rx_handler(
-    mut ingress: Ingress<'static, DefaultDigester<Urc>, Urc, 1024, 128, 3>,
-    mut reader: UartRx<'static, Async>,
-) -> ! {
-    ingress.read_from(&mut reader).await
-}
-
 /// Checks the result of an AT command execution.
+///
+/// Logs the result and returns whether the command was successful.
+///
+/// # Arguments
+///
+/// * `res` - The result of the AT command execution.
+///
+/// # Returns
+///
+/// * `true` if the command succeeded.
+/// * `false` if the command failed.
 fn check_result<T>(res: Result<T, atat::Error>) -> bool
 where
     T: Debug,
@@ -1122,4 +1244,24 @@ where
             false
         }
     }
+}
+
+/// Task for handling incoming data from the modem's UART interface.
+///
+/// Reads data from the UART receiver and processes it using the ATAT ingress handler.
+///
+/// # Arguments
+///
+/// * `ingress` - The ATAT ingress handler for processing modem responses.
+/// * `reader` - The UART receiver for reading modem data.
+///
+/// # Returns
+///
+/// This function runs indefinitely and does not return.
+#[embassy_executor::task]
+pub async fn quectel_rx_handler(
+    mut ingress: Ingress<'static, DefaultDigester<Urc>, Urc, 1024, 128, 3>,
+    mut reader: UartRx<'static, Async>,
+) -> ! {
+    ingress.read_from(&mut reader).await
 }
