@@ -3,7 +3,6 @@
 
 mod cfg;
 mod hal;
-mod hal;
 mod net;
 mod task;
 mod util;
@@ -13,7 +12,6 @@ use crate::net::atcmd::Urc;
 use atat::{ResponseSlot, UrcChannel};
 use embassy_executor::Spawner;
 use embassy_net::{Stack, StackResources};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
@@ -32,7 +30,6 @@ use esp_hal::{
     uart::{Config, Uart},
 };
 use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
-use log::info;
 use log::info;
 use static_cell::StaticCell;
 use task::can::*;
