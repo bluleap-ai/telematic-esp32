@@ -1,34 +1,38 @@
 use core::{fmt::Debug, fmt::Write, str::FromStr};
 
+// use alloc::string::ToString;
 use atat::{
     asynch::{AtatClient, Client},
     AtatIngress, DefaultDigester, Ingress, UrcChannel,
 };
 
+use crate::cfg::net_cfg::*;
+use crate::net::atcmd::general::*;
+use crate::net::atcmd::response::*;
+use crate::net::atcmd::Urc;
+use crate::task::can::*;
+use crate::task::netmgr::ConnectionEvent;
+use crate::task::netmgr::{ActiveConnection, ACTIVE_CONNECTION_CHAN_LTE, CONN_EVENT_CHAN};
+use crate::util::time::utc_date_to_unix_timestamp;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::channel::Channel;
+// use embedded_can::Frame;
 use esp_hal::{
     gpio::Output,
     uart::{UartRx, UartTx},
     Async,
 };
-use esp_println::print;
+// use esp_println::print;
+use core::sync::atomic::{AtomicBool, Ordering};
 use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
-
-use crate::svc::atcmd::general::*;
-use crate::svc::atcmd::response::*;
-use crate::svc::atcmd::Urc;
-
-use crate::cfg::net_cfg::*;
-
-use crate::util::time::utc_date_to_unix_timestamp;
-
 const REGISTERED_HOME: u8 = 1;
 const UNREGISTERED_SEARCHING: u8 = 2;
 const REGISTRATION_DENIED: u8 = 3;
 const REGISTRATION_FAILED: u8 = 4;
 const REGISTERED_ROAMING: u8 = 5;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TripData {
     device_id: heapless::String<36>,
     trip_id: heapless::String<36>,
@@ -36,7 +40,7 @@ pub struct TripData {
     longitude: f64,
     timestamp: u64,
 }
-
+static IS_LTE: AtomicBool = AtomicBool::new(false);
 #[derive(Debug)]
 enum State {
     ResetHardware,
@@ -55,31 +59,51 @@ enum State {
     MqttConnectBroker,
     MqttPublishData,
     ErrorConnection,
+    // GetGPSData,
+    //Connected,
+    //Disconnected,
 }
-
 async fn handle_publish_mqtt_data(
     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
     mqtt_client_id: &str,
+    gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
+    can_channel: &'static TwaiOutbox,
 ) -> bool {
-    let mut mqtt_topic: heapless::String<128> = heapless::String::new();
-    let mut payload: heapless::String<1024> = heapless::String::new();
-    let mut deserialized: [u8; 1024] = [0u8; 1024];
+    if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_LTE.receiver().try_receive() {
+        IS_LTE.store(active_connection == ActiveConnection::Lte, Ordering::SeqCst);
+        info!("[LTE] Updated IS_LTE: {}", IS_LTE.load(Ordering::SeqCst));
+    }
+
+    // If LTE is not active, return false
+    if !IS_LTE.load(Ordering::SeqCst) {
+        info!("[LTE] LTE not active, skipping MQTT publish");
+        return true;
+    }
+
+    let mut trip_topic: heapless::String<128> = heapless::String::new();
+    let mut trip_payload: heapless::String<1024> = heapless::String::new();
+    let mut buf: [u8; 1024] = [0u8; 1024];
+    let mut is_gps_success = false;
+    let mut is_can_success = false;
 
     writeln!(
-        &mut mqtt_topic,
-        "channels/{}/messages/client/trip",
-        mqtt_client_id
+        &mut trip_topic,
+        "channels/{mqtt_client_id}/messages/client/trip"
     )
     .unwrap();
 
-    match client.send(&RetrieveGpsRmc).await {
+    // --- GPS Data ---
+    let trip_result = client.send(&RetrieveGpsRmc).await;
+
+    match trip_result {
         Ok(res) => {
-            info!("GPS RMC data received: {:?}", res);
+            info!("[LTE] GPS RMC data received: {res:?}");
+
             let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
             let mut device_id = heapless::String::new();
             let mut trip_id = heapless::String::new();
-            write!(&mut trip_id, "{}", mqtt_client_id).unwrap();
-            write!(&mut device_id, "{}", mqtt_client_id).unwrap();
+            write!(&mut trip_id, "{mqtt_client_id}").unwrap();
+            write!(&mut device_id, "{mqtt_client_id}").unwrap();
 
             let trip_data = TripData {
                 device_id,
@@ -91,39 +115,108 @@ async fn handle_publish_mqtt_data(
                 timestamp,
             };
 
-            if let Ok(len) = serde_json_core::to_slice(&trip_data, &mut deserialized) {
-                let single_quote = core::str::from_utf8(&deserialized[..len])
+            if gps_channel.try_send(trip_data.clone()).is_err() {
+                error!("[LTE] Failed to send TripData to channel");
+            } else {
+                info!("[LTE] GPS data sent to channel: {trip_data:?}");
+            }
+
+            // Serialize to JSON
+            if let Ok(len) = serde_json_core::to_slice(&trip_data, &mut buf) {
+                let json = core::str::from_utf8(&buf[..len])
                     .unwrap_or_default()
                     .replace('\"', "'");
 
-                if payload.push_str(&single_quote).is_err() {
-                    error!("Payload buffer overflow");
+                if trip_payload.push_str(&json).is_err() {
+                    error!("[LTE] Payload buffer overflow");
                     return false;
                 }
 
-                info!("MQTT payload: {}", payload);
-                check_result(
+                info!("[LTE] MQTT payload (GPS/trip): {trip_payload}");
+                if check_result(
                     client
                         .send(&MqttPublishExtended {
                             tcp_connect_id: 0,
                             msg_id: 0,
                             qos: 0,
                             retain: 0,
-                            topic: mqtt_topic,
-                            payload,
+                            topic: trip_topic,
+                            payload: trip_payload,
                         })
                         .await,
-                )
+                ) {
+                    info!("[LTE] Trip data published successfully");
+                } else {
+                    error!("[LTE] Failed to publish trip data");
+                    is_gps_success = false;
+                }
             } else {
-                error!("Failed to serialize trip data");
-                false
+                error!("[LTE] Failed to serialize trip/GPS data");
             }
         }
         Err(e) => {
-            warn!("Failed to retrieve GPS data: {:?}", e);
-            false
+            warn!("[LTE] Failed to retrieve GPS data: {e:?}");
         }
     }
+
+    // --- CAN Data ---
+
+    let mut can_topic: heapless::String<128> = heapless::String::new();
+    let mut can_payload: heapless::String<1024> = heapless::String::new();
+    let mut buf: [u8; 1024] = [0u8; 1024];
+
+    if let Ok(frame) = can_channel.try_receive() {
+        info!("CAN data from LTE");
+
+        // Prepare CAN topic
+        let can_data = CanFrame {
+            id: frame.id,
+            len: frame.len,
+            data: frame.data,
+        };
+
+        writeln!(
+            &mut can_topic,
+            "channels/{mqtt_client_id}/messages/client/can"
+        )
+        .unwrap();
+
+        // Serialize to JSON
+        if let Ok(len) = serde_json_core::to_slice(&can_data, &mut buf) {
+            let json = core::str::from_utf8(&buf[..len])
+                .unwrap_or_default()
+                .replace('\"', "'");
+
+            if can_payload.push_str(&json).is_err() {
+                error!("[LTE] Payload buffer overflow");
+                return false;
+            }
+
+            info!("[LTE] MQTT payload (CAN): {can_payload}");
+            if check_result(
+                client
+                    .send(&MqttPublishExtended {
+                        tcp_connect_id: 0,
+                        msg_id: 0,
+                        qos: 0,
+                        retain: 0,
+                        topic: can_topic,
+                        payload: can_payload,
+                    })
+                    .await,
+            ) {
+                info!("[LTE] CAN data published successfully");
+            } else {
+                error!("[LTE] Failed to publish CAN data");
+                is_can_success = false;
+            }
+        } else {
+            error!("[LTE] Failed to serialize CAN data");
+            // false
+        }
+    }
+
+    is_can_success && is_gps_success
 }
 
 fn check_result<T>(res: Result<T, atat::Error>) -> bool
@@ -132,11 +225,11 @@ where
 {
     match res {
         Ok(value) => {
-            info!("\t Command succeeded: {:?}", value);
+            info!("[Quectel] \t Command succeeded: {value:?}");
             true
         }
         Err(e) => {
-            error!("Failed to send AT command: {:?}", e);
+            error!("[Quectel] Failed to send AT command: {e:?}");
             false
         }
     }
@@ -161,122 +254,87 @@ pub async fn upload_mqtt_cert_files(
     let mut subscriber = urc_channel.subscribe().unwrap();
     let _ = client.send(&FileList).await.unwrap();
     let now = embassy_time::Instant::now();
-    loop {
+    while now.elapsed().as_secs() < 10 {
         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
         match subscriber.try_next_message_pure() {
-            Some(Urc::ListFile(file)) => {
-                log::info!("File: {:?}", file);
-            }
-            Some(e) => {
-                error!("Unknown URC {:?}", e);
-            }
-            None => {
-                info!("Waiting for response...");
-            }
-        }
-        if now.elapsed().as_secs() > 10 {
-            break;
+            Some(Urc::ListFile(file)) => log::info!("File: {file:?}"),
+            Some(e) => error!("Unknown URC {e:?}"),
+            None => info!("Waiting for response..."),
         }
     }
-    info!("Quectel: remove CA_CRT path");
-    let _ = client
-        .send(&FileDel {
-            name: heapless::String::from_str("crt.pem").unwrap(),
-        })
-        .await;
-    info!("Quectel: remove CLIENT_CRT path");
-    let _ = client
-        .send(&FileDel {
-            name: heapless::String::from_str("dvt.crt").unwrap(),
-        })
-        .await;
-    info!("Quectel: remove CLIENT_KEY path");
-    let _ = client
-        .send(&FileDel {
-            name: heapless::String::from_str("dvt.key").unwrap(),
-        })
-        .await;
-    // Upload CA cert
-    info!("Quectel: Upload MQTT certs to quectel");
-    let _ = raw_data.extend_from_slice(&ca_chain[0..1024]);
-    let _ = client
-        .send(&FileUpl {
-            name: heapless::String::from_str("crt.pem").unwrap(),
-            size: 2574,
-        })
-        .await;
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 1024,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&ca_chain[1024..2048]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 1024,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&ca_chain[2048..]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 526,
-        })
-        .await;
-    embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
-    // Upload client cert
-    let _ = client
-        .send(&FileUpl {
-            name: heapless::String::from_str("dvt.crt").unwrap(),
-            size: 1268,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&certificate[0..1024]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 1024,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&certificate[1024..]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 244,
-        })
-        .await;
-    embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
-    // Upload client key
-    let _ = client
-        .send(&FileUpl {
-            name: heapless::String::from_str("dvt.key").unwrap(),
-            size: 1678,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&private_key[0..1024]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 1024,
-        })
-        .await;
-    raw_data.clear();
-    let _ = raw_data.extend_from_slice(&private_key[1024..]);
-    let _ = client
-        .send(&SendRawData {
-            raw_data: raw_data.clone(),
-            len: 654,
-        })
-        .await;
 
-    info!("Quectel: set MQTTS configuration");
+    // Remove old certs
+    for name in ["crt.pem", "dvt.crt", "dvt.key"] {
+        let _ = client
+            .send(&FileDel {
+                name: heapless::String::from_str(name).unwrap(),
+            })
+            .await;
+        info!("Deleted old {name}");
+    }
+
+    // Upload helper
+    async fn upload_file(
+        client: &mut Client<'static, UartTx<'static, Async>, 1024>,
+        name: &str,
+        content: &[u8],
+        raw_data: &mut heapless::Vec<u8, 4096>,
+    ) -> bool {
+        //Sending file upload command to notify the modem about the file to be uploaded
+        let name_str = match heapless::String::from_str(name) {
+            Ok(s) => s,
+            Err(_) => {
+                error!("Heapless string overflow for file name: {name}");
+                return false;
+            }
+        };
+        //Notify the modem about the file to be uploaded
+        if let Err(e) = client
+            .send(&FileUpl {
+                name: name_str,
+                size: content.len() as u32,
+            })
+            .await
+        {
+            error!("FileUpl command failed: {e:?}");
+            return false;
+        }
+        //Uploading data payload in 1 Kib of chunks
+        for chunk in content.chunks(1024) {
+            raw_data.clear();
+            if raw_data.extend_from_slice(chunk).is_err() {
+                error!("Raw data buffer overflow");
+                return false;
+            };
+
+            if let Err(_e) = client
+                .send(&SendRawData {
+                    raw_data: raw_data.clone(),
+                    len: chunk.len(),
+                })
+                .await
+            {
+                error!("SendRawData command failed");
+                return false;
+            }
+        }
+
+        embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+        true
+    }
+
+    // Upload certs
+    info!("Uploading CA cert...");
+    upload_file(client, "crt.pem", ca_chain, &mut raw_data).await;
+
+    info!("Uploading client cert...");
+    upload_file(client, "dvt.crt", certificate, &mut raw_data).await;
+
+    info!("Uploading client key...");
+    upload_file(client, "dvt.key", private_key, &mut raw_data).await;
+
+    // Configure MQTTS
+    info!("Configuring MQTT over TLS...");
     let _ = client
         .send(&MqttConfig {
             name: heapless::String::from_str("recv/mode").unwrap(),
@@ -293,27 +351,21 @@ pub async fn upload_mqtt_cert_files(
             param_3: Some(2),
         })
         .await;
-    let _ = client
-        .send(&SslConfigCert {
-            name: heapless::String::from_str("cacert").unwrap(),
-            context_id: 2,
-            cert_path: Some(heapless::String::from_str("UFS:crt.pem").unwrap()),
-        })
-        .await;
-    let _ = client
-        .send(&SslConfigCert {
-            name: heapless::String::from_str("clientcert").unwrap(),
-            context_id: 2,
-            cert_path: Some(heapless::String::from_str("UFS:dvt.crt").unwrap()),
-        })
-        .await;
-    let _ = client
-        .send(&SslConfigCert {
-            name: heapless::String::from_str("clientkey").unwrap(),
-            context_id: 2,
-            cert_path: Some(heapless::String::from_str("UFS:dvt.key").unwrap()),
-        })
-        .await;
+
+    for (cfg_name, path) in [
+        ("cacert", "UFS:ca.crt"),
+        ("clientcert", "UFS:dvt.crt"),
+        ("clientkey", "UFS:dvt.key"),
+    ] {
+        let _ = client
+            .send(&SslConfigCert {
+                name: heapless::String::from_str(cfg_name).unwrap(),
+                context_id: 2,
+                cert_path: Some(heapless::String::from_str(path).unwrap()),
+            })
+            .await;
+    }
+
     let _ = client
         .send(&SslConfigOther {
             name: heapless::String::from_str("seclevel").unwrap(),
@@ -357,46 +409,46 @@ pub async fn check_network_registration(
     while start_time.elapsed() < timeout {
         match client.send(&GetEPSNetworkRegistrationStatus {}).await {
             Ok(status) => {
-                log::info!("EPS network registration status: {:?}", status);
+                log::info!("[Quectel] EPS network registration status: {status:?}");
 
                 match status.stat {
                     REGISTERED_HOME => {
                         let elapsed = start_time.elapsed().as_secs();
-                        info!("Registered (Home) after {} seconds", elapsed);
+                        info!("[Quectel] Registered (Home) after {elapsed} seconds");
                         return true; // Successfully registered
                     }
                     UNREGISTERED_SEARCHING => {
-                        print!("."); // Indicating ongoing search
+                        esp_println::print!("."); // Indicating ongoing search
                         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
                     }
                     REGISTRATION_DENIED => {
-                        error!("Registration denied");
+                        error!("[Quectel] Registration denied");
                         return false; // Registration denied
                     }
                     REGISTRATION_FAILED => {
-                        error!("Registration failed");
+                        error!("[Quectel] Registration failed");
                         return false; // Registration failed
                     }
                     REGISTERED_ROAMING => {
                         let elapsed = start_time.elapsed().as_secs();
-                        info!("Registered (Roaming) after {} seconds", elapsed);
+                        info!("[Quectel] Registered (Roaming) after {elapsed} seconds");
                         return true; // Successfully registered
                     }
                     _ => {
-                        error!("Unknown registration status: {}", status.stat);
+                        error!("[Quectel] Unknown registration status: {}", status.stat);
                         return false; // Unknown status
                     }
                 }
             }
             Err(e) => {
-                error!("Failed to get EPS network registration status: {:?}", e);
+                error!("[Quectel] Failed to get EPS network registration status: {e:?}");
                 return false; // Error occurred
             }
         }
     }
 
     // Timeout reached without successful registration
-    error!("Network registration timed out");
+    error!("[Quectel] Network registration timed out");
     false
 }
 
@@ -426,7 +478,7 @@ pub async fn open_mqtt_connection(
         .await
         .map_err(|_| MqttConnectError::CommandFailed)?; // Optionally log the error here for more info
 
-    info!("MQTT open command sent, waiting for response...");
+    info!("[Quectel] MQTT open command sent, waiting for response...");
 
     let mut subscriber = urc_channel
         .subscribe()
@@ -438,7 +490,7 @@ pub async fn open_mqtt_connection(
     loop {
         // Check timeout first
         if start.elapsed() >= TIMEOUT {
-            error!("MQTT open timed out");
+            error!("[Quectel] MQTT open timed out");
             return Err(MqttConnectError::Timeout);
         }
 
@@ -446,21 +498,21 @@ pub async fn open_mqtt_connection(
 
         match subscriber.try_next_message_pure() {
             Some(Urc::MqttOpen(response)) => {
-                info!("Received MQTT open response: {:?}", response);
+                info!("[Quectel] Received MQTT open response: {response:?}");
                 return match response.result {
                     0 => Ok(()),
                     code => {
-                        error!("Modem reported error code: {}", code as u8);
+                        error!("[Quectel] Modem reported error code: {}", code as u8);
                         Err(MqttConnectError::ModemError(code as u8))
                     }
                 };
             }
             Some(other_urc) => {
-                info!("Received unrelated URC: {:?}", other_urc);
+                info!("[Quectel] Received unrelated URC: {other_urc:?}");
                 // Continue waiting for MQTT open response
             }
             None => {
-                warn!("No URC received yet...");
+                warn!("[Quectel] No URC received yet...");
             }
         }
     }
@@ -477,14 +529,14 @@ pub async fn connect_mqtt_broker(
     // Create credentials with proper error handling
     let username = heapless::String::<64>::from_str(MQTT_USR_NAME)
         .map_err(|_| MqttConnectError::StringConversion)?;
-    let password = heapless::String::<64>::from_str(MQTT_USR_NAME) // Note: Same as username - is this intentional?
+    let password = heapless::String::<64>::from_str("f57f9bf3-07b3-4ba5-ae1f-bf6f579e346d") // Note: Same as username - is this intentional?
         .map_err(|_| MqttConnectError::StringConversion)?;
     let client_id = heapless::String::<23>::from_str(CLIENT_ID)
         .map_err(|_| MqttConnectError::StringConversion)?;
 
     // Send connect command with retries
     for attempt in 1..=MAX_RETRIES {
-        info!("MQTT connect attempt {}/{}", attempt, MAX_RETRIES);
+        info!("[Quectel] MQTT connect attempt {attempt}/{MAX_RETRIES}");
 
         match client
             .send(&MqttConnect {
@@ -497,11 +549,11 @@ pub async fn connect_mqtt_broker(
         {
             Ok(_) => break,
             Err(e) if attempt == MAX_RETRIES => {
-                error!("Final connect attempt failed: {:?}", e);
+                error!("[Quectel] Final connect attempt failed: {e:?}");
                 return Err(MqttConnectError::CommandFailed);
             }
             Err(e) => {
-                warn!("Connect attempt failed: {:?} - retrying", e);
+                warn!("[Quectel] Connect attempt failed: {e:?} - retrying");
                 embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
             }
         }
@@ -515,7 +567,7 @@ pub async fn connect_mqtt_broker(
 
     loop {
         if start.elapsed() > RESPONSE_TIMEOUT {
-            error!("MQTT connect timeout");
+            error!("[Quectel] MQTT connect timeout");
             return Err(MqttConnectError::Timeout);
         }
 
@@ -523,17 +575,17 @@ pub async fn connect_mqtt_broker(
 
         match subscriber.try_next_message_pure() {
             Some(Urc::MqttConnect(response)) => {
-                info!("Received MQTT connect response: {:?}", response);
+                info!("[Quectel] Received MQTT connect response: {response:?}");
                 return match response.result {
                     0 => Ok(()),
                     code => {
-                        error!("Modem connection error: {}", code);
+                        error!("[Quectel] Modem connection error: {code}");
                         Err(MqttConnectError::ModemError(code))
                     }
                 };
             }
             Some(other_urc) => {
-                debug!("Ignoring unrelated URC: {:?}", other_urc);
+                debug!("Ignoring unrelated URC: {other_urc:?}");
             }
             None => {
                 trace!("Waiting for MQTT connect response...");
@@ -548,8 +600,11 @@ pub async fn quectel_tx_handler(
     mut pen: Output<'static>,
     mut _dtr: Output<'static>,
     urc_channel: &'static UrcChannel<Urc, 128, 3>,
+    gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
+    can_channel: &'static TwaiOutbox,
 ) -> ! {
     let mut state: State = State::ResetHardware;
+    let mut is_connected = false;
     let ca_chain = include_str!("../../cert/crt.pem").as_bytes();
     let certificate = include_str!("../../cert/dvt.crt").as_bytes();
     let private_key = include_str!("../../cert/dvt.key").as_bytes();
@@ -558,60 +613,60 @@ pub async fn quectel_tx_handler(
         match state {
             State::ResetHardware => {
                 // 0: Reset Hardware
-                info!("Quectel: Reset Hardware");
+                info!("[Quectel] Reset Hardware");
                 reset_modem(&mut pen).await;
                 state = State::DisableEchoMode;
             }
             State::DisableEchoMode => {
-                info!("Quectel: Disable Echo Mode");
+                info!("[Quectel] Disable Echo Mode");
                 if check_result(client.send(&DisableEchoMode).await) {
                     state = State::GetModelId;
                 }
             }
             State::GetModelId => {
-                info!("Quectel: Get Model Id");
+                info!("[Quectel] Get Model Id");
                 if check_result(client.send(&GetModelId).await) {
                     state = State::GetSoftwareVersion;
                 }
             }
             State::GetSoftwareVersion => {
-                info!("Quectel: Get Software Version");
+                info!("[Quectel] Get Software Version");
                 if check_result(client.send(&GetSoftwareVersion).await) {
                     state = State::GetSimCardStatus;
                 }
             }
             State::GetSimCardStatus => {
-                info!("Quectel: Get Sim Card Status");
+                info!("[Quectel] Get Sim Card Status");
                 if check_result(client.send(&GetSimCardStatus).await) {
                     state = State::GetNetworkSignalQuality;
                 }
             }
             State::GetNetworkSignalQuality => {
-                info!("Quectel: Get Network Signal Quality");
+                info!("[Quectel] Get Network Signal Quality");
                 if check_result(client.send(&GetNetworkSignalQuality).await) {
                     state = State::GetNetworkInfo;
                 }
             }
             State::GetNetworkInfo => {
-                info!("Quectel: Get Network Info");
+                info!("[Quectel] Get Network Info");
                 if check_result(client.send(&GetNetworkInfo).await) {
                     state = State::EnableGps;
                 }
             }
             State::EnableGps => {
-                info!("Quectel: Enable GPS");
+                info!("[Quectel] Enable GPS");
                 if check_result(client.send(&EnableGpsFunc).await) {
                     state = State::EnableAssistGps;
                 }
             }
             State::EnableAssistGps => {
-                info!("Quectel: Enable Assist GPS");
+                info!("[Quectel] Enable Assist GPS");
                 if check_result(client.send(&EnableAssistGpsFunc).await) {
                     state = State::SetModemFunctionality;
                 }
             }
             State::SetModemFunctionality => {
-                info!("Quectel: Set Modem Functionality");
+                info!("[Quectel] Set Modem Functionality");
                 if check_result(
                     client
                         .send(&SetUeFunctionality {
@@ -623,7 +678,7 @@ pub async fn quectel_tx_handler(
                 }
             }
             State::UploadMqttCert => {
-                info!("Quectel: Upload Files");
+                info!("[Quectel] Upload Files");
                 let res: bool = upload_mqtt_cert_files(
                     &mut client,
                     urc_channel,
@@ -635,56 +690,74 @@ pub async fn quectel_tx_handler(
                 state = if res {
                     State::CheckNetworkRegistration
                 } else {
-                    error!("File upload failed, resetting hardware");
+                    error!("[Quectel] File upload failed, resetting hardware");
                     State::ErrorConnection
                 };
             }
             State::CheckNetworkRegistration => {
-                info!("Quectel: Check Network Registration");
+                info!("[Quectel] Check Network Registration");
                 let res = check_network_registration(&mut client).await;
-                state = if res {
-                    State::MqttOpenConnection
+                if res {
+                    if !is_connected {
+                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteRegistered);
+                        is_connected = true;
+                    }
+                    state = State::MqttOpenConnection;
                 } else {
-                    error!("Network registration failed, resetting hardware");
-                    State::ErrorConnection
-                };
+                    if is_connected {
+                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteUnregistered);
+                        is_connected = false;
+                    }
+                    error!("[Quectel] Network registration failed, resetting hardware");
+                    state = State::ErrorConnection;
+                }
             }
             State::MqttOpenConnection => {
-                info!("Opening MQTT connection");
+                info!("[Quectel] Opening MQTT connection");
                 match open_mqtt_connection(&mut client, urc_channel).await {
                     Ok(_) => {
-                        info!("MQTT connection opened successfully");
+                        info!("[Quectel] MQTT connection opened successfully");
                         state = State::MqttConnectBroker;
                     }
                     Err(e) => {
-                        error!("Failed to open MQTT connection: {:?}", e);
+                        error!("[Quectel] Failed to open MQTT connection: {e:?}");
                     }
                 }
             }
             State::MqttConnectBroker => {
-                info!("Connecting to MQTT broker");
+                info!("[Quectel] Connecting to MQTT broker");
                 match connect_mqtt_broker(&mut client, urc_channel).await {
                     Ok(_) => {
-                        info!("MQTT connection established");
+                        info!("[Quectel] MQTT connection established");
+                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected);
                         state = State::MqttPublishData;
                     }
                     Err(e) => {
-                        error!("MQTT connection failed: {:?}", e);
+                        error!("[Quectel] MQTT connection failed: {e:?}");
+                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
+                        state = State::ErrorConnection;
                     }
                 }
             }
+
             State::MqttPublishData => {
-                info!("Quectel: Publishing MQTT Data");
-                if handle_publish_mqtt_data(&mut client, MQTT_CLIENT_ID).await {
-                    info!("MQTT data published successfully");
+                info!("[Quectel] Publishing MQTT Data");
+                if handle_publish_mqtt_data(&mut client, MQTT_CLIENT_ID, gps_channel, can_channel)
+                    .await
+                {
+                    info!("[Quectel] MQTT data published successfully");
                     // Transition to next state or maintain publishing state
                     state = State::MqttPublishData;
                 } else {
-                    error!("MQTT publish failed");
+                    error!("[Quectel] MQTT publish failed");
                 }
             }
             State::ErrorConnection => {
-                error!("System in error state - attempting recovery");
+                if is_connected {
+                    let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
+                    is_connected = false;
+                }
+                error!("[Quectel] System in error state - attempting recovery");
                 embassy_time::Timer::after(embassy_time::Duration::from_secs(5)).await;
                 state = State::ResetHardware;
             }

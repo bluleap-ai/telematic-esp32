@@ -147,7 +147,7 @@ pub async fn ota_handler(
     let tenant_token = option_env!("MENDER_CLIENT_TENANT_TOKEN");
     let config = MenderClientConfig::new(
         identity,
-        &format!("{}-{}", device_name, device_version),
+        &format!("{device_name}-{device_version}"),
         device_type,
         option_env!("MENDER_CLIENT_URL").unwrap_or("https://hosted.mender.io"),
         tenant_token,

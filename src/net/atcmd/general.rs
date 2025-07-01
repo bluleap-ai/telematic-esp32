@@ -461,7 +461,7 @@ pub struct MqttConnect {
 /// AT+QMTPUBEX Publish an MQTT Message with Extended Parameters
 ///
 /// The command responds with OK. We need to get the response from the URC +QMTPUB.
-#[derive(Clone, AtatCmd, Debug)]
+#[derive(Clone, AtatCmd)]
 #[at_cmd("+QMTPUB", NoResponse, timeout_ms = 300)]
 pub struct MqttPublishExtended {
     /// <tcpconnectID>

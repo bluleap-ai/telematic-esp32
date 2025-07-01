@@ -4,13 +4,13 @@
 // Declare modules at the crate root
 mod cfg;
 mod hal;
-mod svc;
+mod net;
 mod task;
 mod util;
 
 // Import the necessary modules
 //use crate::hal::flash;
-use crate::svc::atcmd::Urc;
+use crate::net::atcmd::Urc;
 use task::can::*;
 use task::lte::*;
 use task::mqtt::*;
@@ -22,6 +22,7 @@ use task::wifi::*;
 use atat::{ResponseSlot, UrcChannel};
 use embassy_executor::Spawner;
 use embassy_net::{Stack, StackResources};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 #[cfg(feature = "ota")]
 use embassy_time::Duration;
@@ -38,9 +39,12 @@ use esp_hal::{
     uart::{Config, Uart},
 };
 use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
-
+use log::info;
 use static_cell::StaticCell;
-
+use task::lte::TripData;
+use task::netmgr::net_manager_task;
+pub type GpsOutbox = Channel<NoopRawMutex, TripData, 8>;
+static GPS_CHANNEL: StaticCell<GpsOutbox> = StaticCell::new();
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
         static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
@@ -58,6 +62,7 @@ async fn main(spawner: Spawner) -> ! {
         config.cpu_clock = CpuClock::max();
         config
     });
+    info!("Telematic started");
     esp_alloc::heap_allocator!(200 * 1024);
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let timg1 = TimerGroup::new(peripherals.TIMG1);
@@ -85,7 +90,6 @@ async fn main(spawner: Spawner) -> ! {
 
     let seed = 1234;
 
-    // Init network stack
     let (stack, runner) = embassy_net::new(
         wifi_interface,
         config,
@@ -135,19 +139,14 @@ async fn main(spawner: Spawner) -> ! {
     )
     .into_async();
     twai_config.set_filter(
-        const {
-            twai::filter::SingleStandardFilter::new(
-                b"xxxxxxxxxxx",
-                b"x",
-                [b"xxxxxxxx", b"xxxxxxxx"],
-            )
-        },
+        const { twai::filter::SingleExtendedFilter::new(b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", b"x") },
     );
     let can = twai_config.start();
     static CHANNEL: StaticCell<TwaiOutbox> = StaticCell::new();
     let channel = &*CHANNEL.init(Channel::new());
     let (can_rx, _can_tx) = can.split();
 
+    let gps_channel = &*GPS_CHANNEL.init(Channel::new());
     spawner.spawn(can_receiver(can_rx, channel)).ok();
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(runner)).ok();
@@ -155,6 +154,7 @@ async fn main(spawner: Spawner) -> ! {
         .spawn(mqtt_handler(
             stack,
             channel,
+            gps_channel,
             peripherals.SHA,
             peripherals.RSA,
         ))
@@ -166,8 +166,12 @@ async fn main(spawner: Spawner) -> ! {
             quectel_pen_pin,
             quectel_dtr_pin,
             &URC_CHANNEL,
+            gps_channel,
+            channel,
         ))
         .ok();
+
+    spawner.spawn(net_manager_task(spawner)).ok();
     #[cfg(feature = "ota")]
     //wait until wifi connected
     {
