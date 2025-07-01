@@ -10,4 +10,5 @@
   "[ignore]": {
     "editor.defaultFormatter": "foxundermoon.shell-format"
   }
+  "rust-analyzer.checkOnSave.command": "none"
 }

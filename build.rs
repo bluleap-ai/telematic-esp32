@@ -2,7 +2,7 @@ use std::env;
 use std::fs::{create_dir_all, File};
 use std::io::Write;
 use std::path::Path;
-
+#[allow(clippy::uninlined_format_args)]
 fn generate_net_cfg() {
     // Tell Cargo to rebuild if any environment variables change
     println!("cargo:rerun-if-env-changed=WIFI_PSWD");
@@ -38,8 +38,14 @@ pub const MQTT_SERVER_NAME: &str = "{server_name}";
 pub const MQTT_SERVER_PORT: u16 = {server_port};
 pub const MQTT_CLIENT_ID: &str = "{client_id}";
 pub const MQTT_USR_NAME: &str = "{usr_name}";
+// MQTT_USR_PASS is a sensitive value, so we store it as a byte array
 pub const MQTT_USR_PASS: [u8; 36] = *b"{usr_pass}";
-"#
+"#,
+        server_name = server_name,
+        server_port = server_port,
+        client_id = client_id,
+        usr_name = usr_name,
+        usr_pass = usr_pass
     );
 
     // Ensure the target directory exists before writing the file
