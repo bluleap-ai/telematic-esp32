@@ -155,7 +155,7 @@ impl<'a> FlashController<'a> {
             return Err(FsError::InvalidAddress);
         }
 
-        match self.flash.read_data(address, buffer).await {
+        match self.flash.read_data(address, buffer) {
             Ok(()) => {
                 info!(
                     "✓ Read {} bytes from address 0x{:08X}",
@@ -202,7 +202,6 @@ impl<'a> FlashController<'a> {
             match self
                 .flash
                 .read_data(current_addr, &mut buffer[..chunk_size])
-                .await
             {
                 Ok(()) => {
                     if buffer[..chunk_size] != expected_data[offset..offset + chunk_size] {
@@ -292,7 +291,7 @@ async fn main(_spawner: Spawner) -> ! {
     }
 
     // Read and display flash ID
-    match flash.read_id().await {
+    match flash.read_id() {
         Ok(id) => {
             info!("Flash JEDEC ID: {id:02X?}");
             if id == [0xEF, 0x40, 0x18] {
@@ -315,9 +314,9 @@ async fn main(_spawner: Spawner) -> ! {
 
     // Test data
     let firmware_data = b"Firmware v1.0\nThis is test firmware data for embedded system";
-    let ca_chain = include_str!("../../../cert/crt.pem").as_bytes();
-    let cert_data = include_str!("../../../cert/dvt.crt").as_bytes();
-    let private_key = include_str!("../../../cert/dvt.key").as_bytes();
+    let ca_chain = include_str!("../../../certs/ca.crt").as_bytes();
+    let cert_data = include_str!("../../../certs/dvt.crt").as_bytes();
+    let private_key = include_str!("../../../certs/dvt.key").as_bytes();
 
     info!("=== Starting File Write Operations ===");
     info!("Files to write:");

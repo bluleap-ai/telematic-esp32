@@ -3,6 +3,7 @@
 
 mod cfg;
 mod hal;
+mod hal;
 mod net;
 mod task;
 mod util;
@@ -12,6 +13,7 @@ use crate::net::atcmd::Urc;
 use atat::{ResponseSlot, UrcChannel};
 use embassy_executor::Spawner;
 use embassy_net::{Stack, StackResources};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
@@ -30,6 +32,7 @@ use esp_hal::{
     uart::{Config, Uart},
 };
 use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
+use log::info;
 use log::info;
 use static_cell::StaticCell;
 use task::can::*;
@@ -60,6 +63,7 @@ async fn main(spawner: Spawner) -> ! {
         config.cpu_clock = CpuClock::max();
         config
     });
+    info!("Telematic started");
     info!("Telematic started");
     esp_alloc::heap_allocator!(200 * 1024);
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -141,6 +145,7 @@ async fn main(spawner: Spawner) -> ! {
     .into_async();
     twai_config.set_filter(
         const { twai::filter::SingleExtendedFilter::new(b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", b"x") },
+        const { twai::filter::SingleExtendedFilter::new(b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", b"x") },
     );
     let can = twai_config.start();
     static CHANNEL: StaticCell<TwaiOutbox> = StaticCell::new();
@@ -165,6 +170,7 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(net_manager_task(spawner)).unwrap();
 
     #[cfg(feature = "ota")]
+    //wait until wifi connected
     {
         loop {
             if stack.is_link_up() {

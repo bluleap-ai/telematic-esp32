@@ -69,7 +69,7 @@ async fn main(_spawner: Spawner) -> ! {
 
     // Read JEDEC ID
     info!("Reading JEDEC ID...");
-    match flash.read_id().await {
+    match flash.read_id() {
         Ok(id) => {
             info!("JEDEC ID: {id:02x?}");
             // Expected ID for W25Q128FV: [0xEF, 0x40, 0x18]
@@ -121,7 +121,7 @@ async fn main(_spawner: Spawner) -> ! {
     }
 
     info!("Reading data from address {address:#08x}...");
-    match flash.read_data(address, &mut read_data).await {
+    match flash.read_data(address, &mut read_data) {
         Ok(()) => {
             info!("✓ Data read successfully: {read_data:02x?}");
             if read_data == write_data {
@@ -163,7 +163,7 @@ async fn main(_spawner: Spawner) -> ! {
 
     // Verify erase by reading back
     info!("Verifying erase at address {address:#08x}...");
-    match flash.read_data(address, &mut read_data).await {
+    match flash.read_data(address, &mut read_data) {
         Ok(()) => {
             info!("Read after erase: {read_data:02x?}");
             if read_data == [0xFF, 0xFF, 0xFF, 0xFF] {
@@ -189,7 +189,7 @@ async fn main(_spawner: Spawner) -> ! {
         Err(e) => error!("✗ Single byte write failed: {e:?}"),
     }
 
-    match flash.read_byte(byte_addr).await {
+    match flash.read_byte(byte_addr) {
         Ok(byte) => {
             info!("Single byte read: {byte:#04x}");
             if byte == test_byte {
@@ -215,7 +215,7 @@ async fn main(_spawner: Spawner) -> ! {
     // Test invalid address (beyond flash capacity)
     let invalid_addr = flash.capacity() + 1000;
     let mut dummy_buffer = [0u8; 4];
-    match flash.read_data(invalid_addr, &mut dummy_buffer).await {
+    match flash.read_data(invalid_addr, &mut dummy_buffer) {
         Ok(()) => error!("✗ Should have failed with invalid address"),
         Err(ExFlashError::AddressInvalid) => info!("✓ Invalid address correctly rejected"),
         Err(e) => info!("Invalid address test result: {e:?}"),

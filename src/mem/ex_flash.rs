@@ -75,18 +75,20 @@ impl<'d> W25Q128FVSG<'d> {
         Timer::after(Duration::from_millis(10)).await;
 
         // Release from power-down if needed
-        self.release_power_down().await?;
+        self.release_power_down()?;
         Timer::after(Duration::from_millis(1)).await;
 
         Ok(())
     }
 
     /// Validate address is within flash capacity
-    fn validate_address(&self, address: u32) -> Result<(), ExFlashError> {
+    fn is_valid_address(&self, address: u32) -> bool {
         if address >= FLASH_CAPACITY {
-            return Err(ExFlashError::AddressInvalid);
+            log::error!("Address {address} is out of bounds (max: {FLASH_CAPACITY})");
+            false
+        } else {
+            true
         }
-        Ok(())
     }
 
     /// Validate address range is within flash capacity
@@ -101,7 +103,7 @@ impl<'d> W25Q128FVSG<'d> {
     }
 
     /// Read JEDEC ID (Manufacturer ID + Device ID)
-    pub async fn read_id(&mut self) -> Result<[u8; 3], ExFlashError> {
+    pub fn read_id(&mut self) -> Result<[u8; 3], ExFlashError> {
         let mut id = [0u8; 3];
 
         self.cs.set_low();
@@ -119,7 +121,7 @@ impl<'d> W25Q128FVSG<'d> {
     }
 
     /// Read status register 1
-    pub async fn read_status_reg1(&mut self) -> Result<u8, ExFlashError> {
+    pub fn read_status_reg1(&mut self) -> Result<u8, ExFlashError> {
         let mut status = [0u8; 1];
 
         self.cs.set_low();
@@ -135,22 +137,22 @@ impl<'d> W25Q128FVSG<'d> {
     }
 
     /// Check if device is busy (programming/erasing)
-    pub async fn is_busy(&mut self) -> Result<bool, ExFlashError> {
-        let status = self.read_status_reg1().await?;
+    pub fn is_busy(&mut self) -> Result<bool, ExFlashError> {
+        let status = self.read_status_reg1()?;
         Ok((status & BUSY_BIT) != 0)
     }
 
     /// Wait for device to become ready
     pub async fn wait_ready(&mut self) -> Result<(), ExFlashError> {
-        while self.is_busy().await? {
+        while self.is_busy()? {
             Timer::after(Duration::from_millis(1)).await;
         }
         Ok(())
     }
 
     /// Check if write enable latch is set
-    pub async fn is_write_enabled(&mut self) -> Result<bool, ExFlashError> {
-        let status = self.read_status_reg1().await?;
+    pub fn is_write_enabled(&mut self) -> Result<bool, ExFlashError> {
+        let status = self.read_status_reg1()?;
         Ok((status & WEL_BIT) != 0)
     }
 
@@ -165,7 +167,7 @@ impl<'d> W25Q128FVSG<'d> {
         // Verify write enable was set
         Timer::after(Duration::from_micros(10)).await;
 
-        if !self.is_write_enabled().await? {
+        if !self.is_write_enabled()? {
             return Err(ExFlashError::WriteEnableFailed);
         }
 
@@ -173,7 +175,7 @@ impl<'d> W25Q128FVSG<'d> {
     }
 
     /// Send write disable command
-    pub async fn write_disable(&mut self) -> Result<(), ExFlashError> {
+    pub fn write_disable(&mut self) -> Result<(), ExFlashError> {
         self.cs.set_low();
         self.spi
             .write_bytes(&[SpiCommand::WriteDisable as u8])
@@ -183,7 +185,7 @@ impl<'d> W25Q128FVSG<'d> {
     }
 
     /// Read data from flash memory
-    pub async fn read_data(&mut self, address: u32, buffer: &mut [u8]) -> Result<(), ExFlashError> {
+    pub fn read_data(&mut self, address: u32, buffer: &mut [u8]) -> Result<(), ExFlashError> {
         // Validate address range
         self.validate_address_range(address, buffer.len())?;
 
@@ -213,7 +215,7 @@ impl<'d> W25Q128FVSG<'d> {
     }
 
     /// Fast read with dummy byte
-    pub async fn fast_read(&mut self, address: u32, buffer: &mut [u8]) -> Result<(), ExFlashError> {
+    pub fn fast_read(&mut self, address: u32, buffer: &mut [u8]) -> Result<(), ExFlashError> {
         // Validate address range
         self.validate_address_range(address, buffer.len())?;
 
@@ -246,7 +248,7 @@ impl<'d> W25Q128FVSG<'d> {
     /// Write data to flash memory (page program)
     pub async fn write_data(&mut self, address: u32, data: &[u8]) -> Result<(), ExFlashError> {
         // Validate inputs
-        self.validate_address(address)?;
+        self.is_valid_address(address);
 
         if data.is_empty() {
             return Err(ExFlashError::LenInvalid);
@@ -292,7 +294,7 @@ impl<'d> W25Q128FVSG<'d> {
     /// Erase 4KB sector
     pub async fn erase_sector(&mut self, address: u32) -> Result<(), ExFlashError> {
         // Validate address and align to sector boundary
-        self.validate_address(address)?;
+        self.is_valid_address(address);
         let aligned_address = address & !(SECTOR_SIZE as u32 - 1);
 
         self.wait_ready().await?;
@@ -319,7 +321,7 @@ impl<'d> W25Q128FVSG<'d> {
     /// Erase 64KB block
     pub async fn erase_block_64kb(&mut self, address: u32) -> Result<(), ExFlashError> {
         // Validate address and align to 64KB boundary
-        self.validate_address(address)?;
+        self.is_valid_address(address);
         let aligned_address = address & !((64 * 1024) - 1);
 
         self.wait_ready().await?;
@@ -346,7 +348,7 @@ impl<'d> W25Q128FVSG<'d> {
     /// Erase 32KB block
     pub async fn erase_block_32kb(&mut self, address: u32) -> Result<(), ExFlashError> {
         // Validate address and align to 32KB boundary
-        self.validate_address(address)?;
+        self.is_valid_address(address);
         let aligned_address = address & !((32 * 1024) - 1);
 
         self.wait_ready().await?;
@@ -387,7 +389,7 @@ impl<'d> W25Q128FVSG<'d> {
     }
 
     /// Enter power-down mode
-    pub async fn power_down(&mut self) -> Result<(), ExFlashError> {
+    pub fn power_down(&mut self) -> Result<(), ExFlashError> {
         self.cs.set_low();
         self.spi
             .write_bytes(&[SpiCommand::PowerDown as u8])
@@ -397,7 +399,7 @@ impl<'d> W25Q128FVSG<'d> {
     }
 
     /// Release from power-down mode
-    pub async fn release_power_down(&mut self) -> Result<(), ExFlashError> {
+    pub fn release_power_down(&mut self) -> Result<(), ExFlashError> {
         self.cs.set_low();
         self.spi
             .write_bytes(&[SpiCommand::ReleasePowerDown as u8])
@@ -428,9 +430,9 @@ impl<'d> W25Q128FVSG<'d> {
     }
 
     /// Read a single byte
-    pub async fn read_byte(&mut self, address: u32) -> Result<u8, ExFlashError> {
+    pub fn read_byte(&mut self, address: u32) -> Result<u8, ExFlashError> {
         let mut buffer = [0u8; 1];
-        self.read_data(address, &mut buffer).await?;
+        self.read_data(address, &mut buffer)?;
         Ok(buffer[0])
     }
 

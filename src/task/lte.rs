@@ -70,7 +70,7 @@ enum State {
     //Connected,
     //Disconnected,
 }
-pub async fn handle_publish_mqtt_data(
+async fn handle_publish_mqtt_data(
     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
     mqtt_client_id: &str,
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
@@ -528,7 +528,7 @@ pub async fn connect_mqtt_broker(
     // Create credentials with proper error handling
     let username = heapless::String::<64>::from_str(MQTT_USR_NAME)
         .map_err(|_| MqttConnectError::StringConversion)?;
-    let password = heapless::String::<64>::from_str(MQTT_USR_NAME) // Note: Same as username - is this intentional?
+    let password = heapless::String::<64>::from_str("f57f9bf3-07b3-4ba5-ae1f-bf6f579e346d") // Note: Same as username - is this intentional?
         .map_err(|_| MqttConnectError::StringConversion)?;
     let client_id = heapless::String::<23>::from_str(CLIENT_ID)
         .map_err(|_| MqttConnectError::StringConversion)?;
