@@ -70,8 +70,7 @@ async fn main(_spawner: Spawner) -> ! {
         }
     }
 
-    let firmware =
-        include_bytes!("C:/Users/phong.tran-nguyen/Work/Rust/telematic-esp32/firmware.bin");
+    let firmware = include_bytes!("../../../firmware.bin");
     let ca_chain = include_bytes!("../../../certs/ca.crt");
     let cert_data = include_bytes!("../../../certs/dvt.crt");
     let private_key = include_bytes!("../../../certs/dvt.key");
