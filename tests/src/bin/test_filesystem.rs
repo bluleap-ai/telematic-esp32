@@ -2,7 +2,7 @@
 #![no_main]
 
 // #[path = "../../../src/mem/ex_flash.rs"]
-// mod ex_flash;
+// mod ex_flash
 #[allow(unused_imports)]
 #[path = "../../../src/mem/filesystem.rs"]
 mod filesystem;
