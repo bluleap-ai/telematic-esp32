@@ -71,15 +71,25 @@ async fn main(_spawner: Spawner) -> ! {
         }
     }
 
+    let firmware =
+        include_bytes!("C:/Users/phong.tran-nguyen/Work/Rust/telematic-esp32/firmware.bin");
     let ca_chain = include_bytes!("../../../certs/ca.crt");
     let cert_data = include_bytes!("../../../certs/dvt.crt");
     let private_key = include_bytes!("../../../certs/dvt.key");
     info!("=== Starting File Write Operations ===");
     info!("Files to write:");
+    info!("  - firmware: {} bytes", firmware.len());
     info!("  - ca.crt: {} bytes", ca_chain.len());
     info!("  - dvt.crt: {} bytes", cert_data.len());
     info!("  - dvt.key: {} bytes", private_key.len());
 
+    match fs
+        .write_firmware(FlashRegion::Firmware, "firmware.bin", firmware)
+        .await
+    {
+        Ok(()) => info!("✓ Firmware written successfully"),
+        Err(e) => error!("✗ Failed to write Firmware: {:?}", e),
+    }
     match fs
         .write_file(FlashRegion::Certstore, "ca.crt", ca_chain)
         .await
@@ -127,7 +137,33 @@ async fn main(_spawner: Spawner) -> ! {
     // Dump flash for debugging
 
     info!("=== Flash File System Test Completed ===");
-
+    //List file in CertStore
+    info!("== List files in CertStore");
+    match fs.list_files(FlashRegion::Certstore).await {
+        Ok(files) => {
+            if files.is_empty() {
+                info!("(Certstore trống)");
+            } else {
+                for e in files.iter() {
+                    info!("• {:<32}  {:>6} B  @0x{:06X}", e.name, e.len, e.offset);
+                }
+            }
+        }
+        Err(e) => error!("Không duyệt được Certstore: {:?}", e),
+    }
+    //Listfile in firmware
+    match fs.list_files(FlashRegion::Firmware).await {
+        Ok(files) => {
+            if files.is_empty() {
+                info!("(Certstore trống)");
+            } else {
+                for e in files.iter() {
+                    info!("• {:<32}  {:>6} B  @0x{:06X}", e.name, e.len, e.offset);
+                }
+            }
+        }
+        Err(e) => error!("Không duyệt được Certstore: {:?}", e),
+    }
     loop {
         Timer::after(Duration::from_secs(5)).await;
         info!("System running... Flash usage: Firmware + Certificates stored");

@@ -1,3 +1,25 @@
+// Flash File System Controller for W25Q128FVSG
+// ---------------------------------------------------
+// * Purpose: Provides high-level API to erase, write, read, list, and verify
+//   files within defined regions on external SPI Flash chip W25Q128FVSG
+//   using the `embassy` async runtime on ESP32.
+// * All functions use Rust async idioms (`async/await`) in combination
+//   with a custom `ex_flash` driver.
+//
+// Key Terminology:
+// * **Region**: Logical storage area (Firmware / Certstore / UserData) mapped
+//   to specific physical addresses on flash.
+// * **Page**: Smallest write unit (256 bytes).
+// * **Sector**: Smallest erase unit (4096 bytes).
+// * **Block**: Larger erase unit (64 KiB) – faster than sector.
+//
+// File format inside `Certstore`:
+// ```text
+// | name_len | name (UTF-8) | data_len (LE u32) | data ... | (pad with 0xFF) |
+// ```
+// * Each file entry is page-aligned for simpler handling.
+// * A 0xFF byte at the start indicates an unused entry.
+
 pub mod ex_flash;
 #[allow(unused_imports)]
 use crate::filesystem::ex_flash::{ExFlashError, W25Q128FVSG};
@@ -14,9 +36,10 @@ use esp_hal::{
     },
     timer::timg::TimerGroup,
 };
-use heapless::Vec;
+use heapless::{String, Vec};
 use log::{error, info, warn};
 
+// FsError: High-level errors returned by the FlashController.
 #[derive(Debug)]
 pub enum FsError {
     FlashError(ExFlashError),
@@ -33,7 +56,7 @@ impl From<ExFlashError> for FsError {
         FsError::FlashError(err)
     }
 }
-
+// FlashRegion: Logical to physical address mapping for different data sections.
 #[derive(Debug)]
 pub enum FlashRegion {
     Firmware = 0x000000,
@@ -46,13 +69,15 @@ const CERT_DIR_SIZE: usize = 0x1000;
 const MAX_FILES: usize = 16;
 const MAX_NAME: usize = 32;
 
-#[derive(Clone)]
-struct DirEntry {
-    name_len: u8,
-    name: heapless::String<MAX_NAME>,
-    offset: u32,
-    len: u32,
+// DirEntry: Structure describing a file entry inside the flash system.
+#[derive(Clone, Debug)]
+pub struct DirEntry {
+    pub name_len: u8,
+    pub name: heapless::String<MAX_NAME>,
+    pub offset: u32,
+    pub len: u32,
 }
+// FlashController: Main interface for managing file system operations on flash.
 
 pub struct FlashController<'a> {
     flash: &'a mut W25Q128FVSG<'a>,
@@ -63,7 +88,7 @@ pub struct RegionInfo {
     pub start: u32,
     pub size: u32,
 }
-
+// FlashRegion: Logical to physical address mapping for different data sections.
 impl FlashRegion {
     pub const fn info(&self) -> RegionInfo {
         match self {
@@ -84,13 +109,14 @@ impl FlashRegion {
 }
 
 impl<'a> FlashController<'a> {
+    // - `new`: Create a new flash controller with initial offset set to 0.
     pub fn new(flash: &'a mut W25Q128FVSG<'a>) -> Self {
         Self {
             flash,
-            last_offset: 0, // Initialize to start of Certstore
+            last_offset: 0, // Initialize to start of flash region
         }
     }
-
+    // - `erase_region`: Erase an entire region (Firmware, Certstore, or UserData).
     pub async fn erase_region(&mut self, region: FlashRegion) -> Result<(), FsError> {
         let info = region.info();
         self.erase_range(info.start, info.start + info.size)
@@ -101,6 +127,7 @@ impl<'a> FlashController<'a> {
         Ok(())
     }
 
+    // - `erase_range`: Erase a specified address range using sector or block erase.
     async fn erase_range(&mut self, start: u32, end: u32) -> Result<(), ExFlashError> {
         if start >= end || end > self.flash.capacity() as u32 {
             return Err(ExFlashError::AddressInvalid);
@@ -118,7 +145,7 @@ impl<'a> FlashController<'a> {
             );
             for addr in (start_block..end_block).step_by(block_size as usize) {
                 let mut buf = [0u8; 64];
-                self.flash.read_data(addr, &mut buf).await?;
+                self.flash.read_data(addr, &mut buf)?;
                 if buf.iter().all(|&b| b == 0xFF) {
                     info!("Block at 0x{:08X} already erased, skipping", addr);
                     continue;
@@ -150,7 +177,7 @@ impl<'a> FlashController<'a> {
             );
             for addr in (start_sector..end_sector).step_by(sector_size as usize) {
                 let mut buf = [0u8; 64];
-                self.flash.read_data(addr, &mut buf).await?;
+                self.flash.read_data(addr, &mut buf)?;
                 if buf.iter().all(|&b| b == 0xFF) {
                     info!("Sector at 0x{:08X} already erased, skipping", addr);
                     continue;
@@ -173,6 +200,22 @@ impl<'a> FlashController<'a> {
         Ok(())
     }
 
+    // - `find_free_offset`: Scan for the next available (unused) entry offset within a region.
+    // 1.  Start at self.last_offset (where the previous write ended).
+    // 2.  Loop while cur < region.size:
+    //     a.  addr = region.start + cur
+    //     b.  Read one byte → name_len
+    //         • 0xFF  →  this page is untouched ⇒ free space found
+    //                    ↳ return cur aligned up to page boundary.
+    //     c.  Sanity-check: if name_len > MAX_NAME ⇒ corrupted entry ⇒ abort.
+    //     d.  Read 4-byte data_len located at
+    //            size_addr = addr + 1 + name_len
+    //     e.  Compute total entry length:
+    //            entry_size = 1 + name_len + 4 + data_len + 4   // +4 CRC32
+    //     f.  Advance cur by entry_size, then round it up to the next page
+    //            cur = align_up(cur, page_size)
+    // 3.  If the loop ends with no 0xFF byte encountered, the region is full
+    //     ⇒ return None.
     async fn find_free_offset(&mut self, region: &FlashRegion) -> Option<u32> {
         let info = region.info();
         let page_size = self.flash.page_size() as u32;
@@ -182,7 +225,7 @@ impl<'a> FlashController<'a> {
             let addr = info.start + cur;
 
             let mut len_buf = [0u8; 1];
-            if let Err(e) = self.flash.read_data(addr, &mut len_buf).await {
+            if let Err(e) = self.flash.read_data(addr, &mut len_buf) {
                 error!(
                     "Failed to read filename length at address 0x{:08X}: {:?}",
                     addr, e
@@ -212,7 +255,7 @@ impl<'a> FlashController<'a> {
 
             let mut size_buf = [0u8; 4];
             let size_addr = addr + 1 + name_len;
-            if let Err(e) = self.flash.read_data(size_addr, &mut size_buf).await {
+            if let Err(e) = self.flash.read_data(size_addr, &mut size_buf) {
                 error!(
                     "Failed to read data length at address 0x{:08X}: {:?}",
                     size_addr, e
@@ -229,6 +272,27 @@ impl<'a> FlashController<'a> {
         None
     }
 
+    // - `write_file`: Write a file into the flash region.
+    // 1. Validate filename length and input data length
+    // 2. Compute total file size: filename + 4-byte length + data + 4-byte CRC
+    // 3. Get flash region information and calculate aligned offset (next page-aligned address)
+    // 4. Check if there is enough space in region to write the file
+    // 5. Prepare in-memory file buffer with:
+    //    - [filename length (1 byte)]
+    //    - [filename bytes]
+    //    - [data length (4 bytes, little-endian)]
+    //    - [payload data]
+    //    - [CRC32 of payload (4 bytes)]
+    // 6. Scan current flash region up to this offset to preserve existing valid entries
+    //    - Read filename length, filename, size, and data for each valid entry
+    //    - Align entries to page boundaries and store them into `preserved_data` buffer
+    // 7. Check if any page about to be written is not fully erased (contains non-0xFF)
+    //    - If so, erase the entire affected sector
+    //    - Rewrite preserved data (with per-page verify after write)
+    // 8. Pad the file buffer to align with full page size if needed
+    // 9. Write the padded buffer to flash, page-by-page
+    //    - After each write, verify content is correctly written
+    // 10. Update `last_offset` tracker to point after this file (aligned to page boundary)
     pub async fn write_file(
         &mut self,
         region: FlashRegion,
@@ -249,7 +313,8 @@ impl<'a> FlashController<'a> {
         }
 
         let info = region.info();
-        let file_size = 1 + filename.len() + 4 + data.len();
+        let crc = crc32fast::hash(data);
+        let file_size = 1 + filename.len() + 4 + data.len() + 4;
         if file_size > 4096 {
             error!(
                 "File '{}' too large for buffer: {} bytes",
@@ -283,6 +348,8 @@ impl<'a> FlashController<'a> {
         buf.extend_from_slice(&(data.len() as u32).to_le_bytes())
             .unwrap();
         buf.extend_from_slice(data).unwrap();
+        buf.extend_from_slice(&crc.to_le_bytes()).unwrap(); // <-- THÊM DÒNG NÀY
+
         info!(
             "Prepared file buffer, first 16 bytes: {:?}",
             &buf[..core::cmp::min(16, buf.len())]
@@ -300,7 +367,7 @@ impl<'a> FlashController<'a> {
         while cur < offset {
             let addr = info.start + cur;
             let mut len_buf = [0u8; 1];
-            if let Err(e) = self.flash.read_data(addr, &mut len_buf).await {
+            if let Err(e) = self.flash.read_data(addr, &mut len_buf) {
                 error!("Failed to read name length at 0x{:08X}: {:?}", addr, e);
                 return Err(FsError::FlashError(e));
             }
@@ -319,7 +386,6 @@ impl<'a> FlashController<'a> {
             if let Err(e) = self
                 .flash
                 .read_data(addr + 1, &mut name_buf[..name_len as usize])
-                .await
             {
                 error!("Failed to read name at 0x{:08X}: {:?}", addr + 1, e);
                 return Err(FsError::FlashError(e));
@@ -329,14 +395,14 @@ impl<'a> FlashController<'a> {
 
             let mut size_buf = [0u8; 4];
             let size_addr = addr + 1 + name_len;
-            if let Err(e) = self.flash.read_data(size_addr, &mut size_buf).await {
+            if let Err(e) = self.flash.read_data(size_addr, &mut size_buf) {
                 error!("Failed to read data length at 0x{:08X}: {:?}", size_addr, e);
                 return Err(FsError::FlashError(e));
             }
             let data_len = u32::from_le_bytes(size_buf);
             info!("Data length: {} bytes", data_len);
 
-            let entry_size = 1 + name_len + 4 + data_len;
+            let entry_size = 1 + name_len + 4 + data_len + 4;
             let entry_end = addr + entry_size;
             let aligned_end = (entry_end + page_size - 1) & !(page_size - 1);
 
@@ -351,7 +417,6 @@ impl<'a> FlashController<'a> {
             if let Err(e) = self
                 .flash
                 .read_data(addr, &mut entry_data[..(aligned_end - addr) as usize])
-                .await
             {
                 error!("Failed to read entry at 0x{:08X}: {:?}", addr, e);
                 return Err(FsError::FlashError(e));
@@ -375,7 +440,7 @@ impl<'a> FlashController<'a> {
         let mut needs_erase = false;
         for page_addr in (start_page..end_page).step_by(page_size as usize) {
             let mut page_buf = [0xFFu8; 256];
-            if let Err(e) = self.flash.read_data(page_addr, &mut page_buf).await {
+            if let Err(e) = self.flash.read_data(page_addr, &mut page_buf) {
                 error!("Failed to read page at 0x{:08X}: {:?}", page_addr, e);
                 return Err(FsError::FlashError(e));
             }
@@ -424,7 +489,6 @@ impl<'a> FlashController<'a> {
                         if let Err(e) = self
                             .flash
                             .read_data(page_addr, &mut verify_buf[..chunk_size])
-                            .await
                         {
                             error!(
                                 "Failed to verify preserved data at 0x{:08X}: {:?}",
@@ -489,7 +553,6 @@ impl<'a> FlashController<'a> {
             if let Err(e) = self
                 .flash
                 .read_data(page_addr, &mut verify_buf[..chunk_size])
-                .await
             {
                 error!("Failed to verify read at 0x{:08X}: {:?}", page_addr, e);
                 return Err(FsError::FlashError(e));
@@ -520,6 +583,14 @@ impl<'a> FlashController<'a> {
         Ok(())
     }
 
+    // - `write_firmware`: Directly write firmware at fixed offset in Firmware region.
+    //     - Writes metadata followed by the firmware payload.
+    // 1. Validate firmware size against flash capacity and region boundary
+    // 2. Prepare metadata: [filename length (1 byte)] + [filename] + [firmware length (4 bytes)]
+    // 3. Erase the flash region that will store metadata and firmware content
+    // 4. Write metadata to flash
+    // 5. Write firmware content to flash in chunks aligned to flash page size
+    // 6. Optionally verify write (if needed)
     pub async fn write_firmware(
         &mut self,
         region: FlashRegion,
@@ -544,22 +615,32 @@ impl<'a> FlashController<'a> {
             .await?;
         self.flash.write_data(address, &metadata[..n + 4]).await?;
 
+        let header_len = (n + 4) as u32;
+        let mut addr = address + header_len;
         let mut offset = 0;
-        let page = self.flash.page_size();
+        let page = self.flash.page_size() as u32; // 256
+
         while offset < data.len() {
-            let chunk = core::cmp::min(page, data.len() - offset);
+            // Số byte còn trống trong trang hiện tại
+            let page_off = (addr & (page - 1)) as usize;
+            let space_in_page = (page as usize) - page_off;
+            let chunk = core::cmp::min(space_in_page, data.len() - offset);
+
             self.flash
-                .write_data(
-                    address + (n + 4) as u32 + offset as u32,
-                    &data[offset..offset + chunk],
-                )
+                .write_data(addr, &data[offset..offset + chunk])
                 .await
                 .map_err(FsError::FlashError)?;
-            offset += page;
+
+            addr += chunk as u32;
+            offset += chunk;
         }
+
         Ok(())
     }
 
+    // - `read_file`: Read a file’s content by filename.
+    //     - Searches through entries until match.
+    //     - Validates and loads the file into buffer.
     pub async fn read_file(
         &mut self,
         region: FlashRegion,
@@ -576,7 +657,7 @@ impl<'a> FlashController<'a> {
             info!("Checking entry at address 0x{:08X}", addr);
 
             let mut len = [0u8; 1];
-            if let Err(e) = self.flash.read_data(addr, &mut len).await {
+            if let Err(e) = self.flash.read_data(addr, &mut len) {
                 error!("Failed to read name length at 0x{:08X}: {:?}", addr, e);
                 return Err(FsError::FlashError(e));
             }
@@ -594,11 +675,7 @@ impl<'a> FlashController<'a> {
             }
 
             let mut name_buf = [0u8; MAX_NAME];
-            if let Err(e) = self
-                .flash
-                .read_data(addr + 1, &mut name_buf[..name_len])
-                .await
-            {
+            if let Err(e) = self.flash.read_data(addr + 1, &mut name_buf[..name_len]) {
                 error!("Failed to read filename at 0x{:08X}: {:?}", addr + 1, e);
                 return Err(FsError::FlashError(e));
             }
@@ -607,7 +684,7 @@ impl<'a> FlashController<'a> {
 
             let mut size_buf = [0u8; 4];
             let size_addr = addr + 1 + name_len as u32;
-            if let Err(e) = self.flash.read_data(size_addr, &mut size_buf).await {
+            if let Err(e) = self.flash.read_data(size_addr, &mut size_buf) {
                 error!("Failed to read data length at 0x{:08X}: {:?}", size_addr, e);
                 return Err(FsError::FlashError(e));
             }
@@ -627,7 +704,6 @@ impl<'a> FlashController<'a> {
                 if let Err(e) = self
                     .flash
                     .read_data(data_addr, &mut buffer[..data_len as usize])
-                    .await
                 {
                     error!("Failed to read data at 0x{:08X}: {:?}", data_addr, e);
                     return Err(FsError::FlashError(e));
@@ -647,6 +723,8 @@ impl<'a> FlashController<'a> {
         Err(FsError::FileNotFound)
     }
 
+    // - `verify_file`: Compares stored file data with expected buffer.
+    //     - Useful for post-write integrity checks.
     pub async fn verify_file(
         &mut self,
         base: FlashRegion,
@@ -680,6 +758,8 @@ impl<'a> FlashController<'a> {
         }
     }
 
+    // - `list_files`: Enumerates all valid file entries within a region.
+    //     - Returns a list of `DirEntry` structs.
     pub async fn list_files(
         &mut self,
         region: FlashRegion,
@@ -697,7 +777,6 @@ impl<'a> FlashController<'a> {
             let mut len_buf = [0u8; 1];
             self.flash
                 .read_data(addr, &mut len_buf)
-                .await
                 .map_err(FsError::FlashError)?;
             let name_len = len_buf[0] as usize;
 
@@ -714,23 +793,21 @@ impl<'a> FlashController<'a> {
             let mut name_buf = [0u8; MAX_NAME];
             self.flash
                 .read_data(addr + 1, &mut name_buf[..name_len])
-                .await
                 .map_err(FsError::FlashError)?;
-            let name = core::str::from_utf8(&name_buf[..name_len])
-                .unwrap_or("<invalid>")
-                .to_string();
+            let name_str = core::str::from_utf8(&name_buf[..name_len]).unwrap_or("<invalid>");
+            let mut name = heapless::String::<MAX_NAME>::new();
+            name.push_str(name_str).unwrap();
 
             let mut size_buf = [0u8; 4];
             let size_addr = addr + 1 + name_len as u32;
             self.flash
                 .read_data(size_addr, &mut size_buf)
-                .await
                 .map_err(FsError::FlashError)?;
             let data_len = u32::from_le_bytes(size_buf);
 
             let entry = DirEntry {
                 name_len: name_len as u8,
-                name: heapless::String::from(name),
+                name,
                 offset: addr,
                 len: data_len,
             };
@@ -743,6 +820,7 @@ impl<'a> FlashController<'a> {
         Ok(files)
     }
 
+    // - `get_flash_info`: Returns flash capacity, page size, and sector size.
     pub async fn get_flash_info(&self) -> (u32, usize, usize) {
         (
             self.flash.capacity(),
@@ -751,11 +829,12 @@ impl<'a> FlashController<'a> {
         )
     }
 
+    // - `dump_flash`: Reads and prints the start of a region as a debug hex dump.
     pub async fn dump_flash(&mut self, region: FlashRegion, len: usize) {
         let info = region.info();
         let mut buf = [0u8; 4096];
         let read_len = core::cmp::min(len, buf.len());
-        if let Ok(()) = self.flash.read_data(info.start, &mut buf[..read_len]).await {
+        if let Ok(()) = self.flash.read_data(info.start, &mut buf[..read_len]) {
             info!("Flash dump at 0x{:08X}: {:?}", info.start, &buf[..read_len]);
         } else {
             error!("Failed to dump flash at 0x{:08X}", info.start);
