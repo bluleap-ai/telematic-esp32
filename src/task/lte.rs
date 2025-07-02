@@ -47,7 +47,7 @@ static IS_LTE: AtomicBool = AtomicBool::new(false);
 ///
 /// * `true` if both GPS and CAN data are published successfully or if LTE is inactive.
 /// * `false` if serialization or publishing fails due to buffer overflow or AT command errors.
-async fn handle_publish_mqtt_data(
+pub async fn handle_publish_mqtt_data(
     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
     mqtt_client_id: &str,
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,

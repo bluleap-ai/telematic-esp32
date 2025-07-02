@@ -8,8 +8,10 @@ mod task;
 mod util;
 
 //use crate::hal::flash;
+use crate::cfg::net_cfg::MQTT_CLIENT_ID;
 use crate::net::atcmd::Urc;
 use atat::{ResponseSlot, UrcChannel};
+use core::{fmt::Debug, fmt::Write, str::FromStr};
 use embassy_executor::Spawner;
 use embassy_net::{Stack, StackResources};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -34,12 +36,12 @@ use log::{error, info};
 use static_cell::StaticCell;
 use task::can::*;
 // use task::lte::TripData;
-// use task::lte::*;
 use task::mqtt::*;
 use task::netmgr::net_manager_task;
 #[cfg(feature = "ota")]
 use task::ota::ota_handler;
 use task::quectel::*;
+// use task::lte::*;
 
 use task::wifi::*;
 pub type GpsOutbox = Channel<NoopRawMutex, TripData, 8>;
@@ -151,20 +153,30 @@ async fn main(spawner: Spawner) -> ! {
     let gps_channel = &*GPS_CHANNEL.init(Channel::new());
 
     spawner.spawn(can_receiver(can_rx, channel)).unwrap();
-    spawner.spawn(connection(controller)).unwrap();
-    spawner.spawn(net_task(runner)).unwrap();
-    spawner
-        .spawn(mqtt_handler(
-            stack,
-            channel,
-            gps_channel,
-            peripherals.SHA,
-            peripherals.RSA,
-        ))
-        .unwrap();
+    // spawner.spawn(connection(controller)).unwrap();
+    // spawner.spawn(net_task(runner)).unwrap();
+    // spawner
+    //     .spawn(mqtt_handler(
+    //         stack,
+    //         channel,
+    //         gps_channel,
+    //         peripherals.SHA,
+    //         peripherals.RSA,
+    //     ))
+    //     .unwrap();
 
-    spawner.spawn(net_manager_task(spawner)).unwrap();
-
+    // spawner.spawn(net_manager_task(spawner)).unwrap();
+    // spawner.spawn(quectel_rx_handler(ingress, uart_rx)).ok();
+    // spawner
+    //     .spawn(quectel_tx_handler(
+    //         client,
+    //         quectel_pen_pin,
+    //         quectel_dtr_pin,
+    //         &URC_CHANNEL,
+    //         gps_channel,
+    //         channel,
+    //     ))
+    //     .ok();
     // ====================================
     // === Spawn RX handler Quectel ===
     // ====================================
@@ -175,44 +187,55 @@ async fn main(spawner: Spawner) -> ! {
     // ====================================
     let mut quectel = Quectel::new(client, quectel_pen_pin, quectel_dtr_pin, &URC_CHANNEL);
 
-    loop {
-        match quectel.quectel_initialize().await {
-            Ok(()) => {
-                info!("[main] Modem initialized successfully");
-                break;
-            }
-            Err(e) => {
-                error!("[main] Modem init failed: {:?}", e);
-                Timer::after(Duration::from_secs(5)).await;
-            }
+    match quectel.quectel_initialize().await {
+        Ok(()) => {
+            info!("[main] Modem initialized successfully");
+        }
+        Err(e) => {
+            error!("[main] Modem init failed: {:?}", e);
+            Timer::after(Duration::from_secs(5)).await;
         }
     }
 
+    let ca_chain = include_str!("../certx/crt.pem").as_bytes();
+    let certificate = include_str!("../certx/dvt.crt").as_bytes();
+    let private_key = include_str!("../certx/dvt.key").as_bytes();
     // Initialize LTE
-    loop {
-        match quectel
-            .lte_initialize(
-                "telematics-control-unit",
-                b"ca_chain_content",
-                b"certificate_content",
-                b"private_key_content",
-            )
-            .await
-        {
-            Ok(()) => {
-                info!("[main] LTE initialized successfully");
-                break;
-            }
-            Err(e) => {
-                error!("[main] LTE init failed: {:?}", e);
-                Timer::after(Duration::from_secs(5)).await;
-            }
+
+    match quectel
+        .lte_initialize(MQTT_CLIENT_ID, ca_chain, certificate, private_key)
+        .await
+    {
+        Ok(()) => {
+            info!("[main] Modem initialized successfully");
+        }
+        Err(e) => {
+            error!("[main] Modem init failed: {:?}", e);
+            Timer::after(Duration::from_secs(5)).await;
+        }
+    }
+    match quectel.gps_initialize().await {
+        Ok(()) => {
+            info!("[main] LTE initialized successfully");
+        }
+        Err(e) => {
+            error!("[main] LTE init failed: {:?}", e);
+            Timer::after(Duration::from_secs(5)).await;
         }
     }
 
+    match quectel.lte_handle_mqtt().await {
+        Ok(()) => {
+            info!("[main] LTE initialized successfully");
+        }
+        Err(e) => {
+            error!("[main] LTE init failed: {:?}", e);
+            Timer::after(Duration::from_secs(5)).await;
+        }
+    }
     // Spawn GPS state machine task
     spawner
-        .spawn(gps_task(quectel, "telematics-control-unit", gps_channel))
+        .spawn(gps_task(quectel, MQTT_CLIENT_ID, gps_channel))
         .unwrap();
 
     #[cfg(feature = "ota")]
