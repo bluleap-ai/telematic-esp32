@@ -20,10 +20,8 @@ pub async fn connection(mut controller: WifiController<'static>) {
     loop {
         if esp_wifi::wifi::wifi_state() == WifiState::StaConnected {
             info!("[WiFi] Already connected. Waiting for disconnect event...");
-            // let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::WiFiConnected);
             controller.wait_for_event(WifiEvent::StaDisconnected).await;
             info!("[WiFi] Disconnected. Reconnecting in 5 seconds...");
-            // let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::WiFiDisconnected);
             Timer::after(Duration::from_millis(5000)).await
         }
         if !matches!(controller.is_started(), Ok(true)) {

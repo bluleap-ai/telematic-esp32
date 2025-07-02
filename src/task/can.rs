@@ -3,15 +3,15 @@ use embedded_can::{Frame, Id};
 use esp_hal::twai::TwaiRx;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
-
-#[allow(dead_code)]
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CanFrame {
+    /// CAN frame identifier.
     pub id: u32,
+    /// Length of the data in the CAN frame.
     pub len: u8,
+    /// Data payload of the CAN frame (up to 8 bytes).
     pub data: [u8; 8],
 }
-
 pub type TwaiOutbox = Channel<NoopRawMutex, CanFrame, 16>;
 
 #[embassy_executor::task]

@@ -30,9 +30,6 @@ const UNREGISTERED_SEARCHING: u8 = 2; // Modem searching for network
 const REGISTRATION_DENIED: u8 = 3; // Network registration denied
 const REGISTRATION_FAILED: u8 = 4; // Network registration failed
 
-// Atomic boolean for tracking LTE connection status
-pub static IS_LTE: AtomicBool = AtomicBool::new(false);
-
 /// Error types for Quectel modem operations.
 #[derive(Debug)]
 pub enum QuectelError {
@@ -63,27 +60,15 @@ pub enum MqttConnectError {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TripData {
     /// Device identifier (up to 36 characters).
-    device_id: String<36>,
+    pub device_id: String<36>,
     /// Trip identifier (up to 36 characters).
-    trip_id: String<36>,
+    pub trip_id: String<36>,
     /// Latitude in decimal degrees.
-    latitude: f64,
+    pub latitude: f64,
     /// Longitude in decimal degrees.
-    longitude: f64,
+    pub longitude: f64,
     /// Unix timestamp of the GPS data.
-    timestamp: u64,
-}
-
-/// Placeholder struct for CAN frame data.
-/// Note: This is a temporary definition; replace with actual definition from `crate::task::can`.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CanFrame {
-    /// CAN frame identifier.
-    pub id: u32,
-    /// Length of the data in the CAN frame.
-    pub len: u8,
-    /// Data payload of the CAN frame (up to 8 bytes).
-    pub data: [u8; 8],
+    pub timestamp: u64,
 }
 
 /// States for the Quectel modem state machine.
@@ -118,7 +103,7 @@ pub enum State {
     /// Connects to the MQTT broker.
     MqttConnectBroker,
     /// Publishes GPS and CAN data to the MQTT broker.
-    MqttPublishData,
+    GetGPSData,
     /// Handles error recovery.
     ErrorConnection,
 }
@@ -165,86 +150,123 @@ impl Quectel {
         }
     }
 
-    /// Runs the Quectel modem state machine.
+    /// Initializes the Quectel modem hardware and basic configuration.
     ///
-    /// This function manages the modem's state transitions, executing each state in sequence
-    /// and handling errors by transitioning to the error state. It runs indefinitely, with
-    /// a 1-second delay between state transitions.
-    ///
-    /// # Arguments
-    ///
-    /// * `mqtt_client_id` - The MQTT client identifier for publishing data.
-    /// * `ca_chain` - The CA certificate chain for MQTT authentication.
-    /// * `certificate` - The client certificate for MQTT authentication.
-    /// * `private_key` - The client private key for MQTT authentication.
-    /// * `gps_channel` - Channel for receiving GPS-related `TripData`.
-    /// * `can_channel` - Channel for receiving CAN-related `TripData` (TWAI outbox).
+    /// Executes the initialization sequence from ResetHardware to GetNetworkInfo.
+    /// Returns on success or if an error occurs during initialization.
     ///
     /// # Returns
     ///
-    /// This function runs indefinitely and does not return.
-    pub async fn run_quectel(
-        &mut self,
-        mqtt_client_id: &str,
-        ca_chain: &'static [u8],
-        certificate: &'static [u8],
-        private_key: &'static [u8],
-        gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
-        can_channel: &'static TwaiOutbox,
-    ) -> ! {
+    /// * `Ok(())` if initialization completes successfully.
+    /// * `Err(QuectelError)` if any step fails.
+    pub async fn quectel_initialize(&mut self) -> Result<(), QuectelError> {
+        info!("[Quectel] Starting modem initialization");
         let mut state = State::ResetHardware;
+
         loop {
             match state {
                 State::ResetHardware => {
                     if self.reset_hardware().await.is_ok() {
                         state = State::DisableEchoMode;
+                    } else {
+                        error!("[Quectel] Modem init failed at ResetHardware");
+                        return Err(QuectelError::CommandFailed);
                     }
                 }
                 State::DisableEchoMode => {
                     if self.disable_echo_mode().await.is_ok() {
                         state = State::GetModelId;
+                    } else {
+                        error!("[Quectel] Modem init failed at DisableEchoMode");
+                        return Err(QuectelError::CommandFailed);
                     }
                 }
                 State::GetModelId => {
                     if self.get_model_id().await.is_ok() {
                         state = State::GetSoftwareVersion;
+                    } else {
+                        error!("[Quectel] Modem init failed at GetModelId");
+                        return Err(QuectelError::CommandFailed);
                     }
                 }
                 State::GetSoftwareVersion => {
                     if self.get_software_version().await.is_ok() {
                         state = State::GetSimCardStatus;
+                    } else {
+                        error!("[Quectel] Modem init failed at GetSoftwareVersion");
+                        return Err(QuectelError::CommandFailed);
                     }
                 }
                 State::GetSimCardStatus => {
                     if self.get_sim_card_status().await.is_ok() {
                         state = State::GetNetworkSignalQuality;
+                    } else {
+                        error!("[Quectel] Modem init failed at GetSimCardStatus");
+                        return Err(QuectelError::CommandFailed);
                     }
                 }
                 State::GetNetworkSignalQuality => {
                     if self.get_network_signal_quality().await.is_ok() {
                         state = State::GetNetworkInfo;
+                    } else {
+                        error!("[Quectel] Modem init failed at GetNetworkSignalQuality");
+                        return Err(QuectelError::CommandFailed);
                     }
                 }
                 State::GetNetworkInfo => {
                     if self.get_network_info().await.is_ok() {
-                        state = State::EnableGps;
-                    }
-                }
-                State::EnableGps => {
-                    if self.enable_gps().await.is_ok() {
-                        state = State::EnableAssistGps;
-                    }
-                }
-                State::EnableAssistGps => {
-                    if self.enable_assist_gps().await.is_ok() {
                         state = State::SetModemFunctionality;
+                    } else {
+                        error!("[Quectel] Modem init failed at GetNetworkInfo");
+                        return Err(QuectelError::CommandFailed);
                     }
                 }
                 State::SetModemFunctionality => {
                     if self.set_modem_functionality().await.is_ok() {
-                        state = State::UploadMqttCert;
+                        info!("[Quectel] Modem initialization completed");
+                        return Ok(());
+                    } else {
+                        error!("[Quectel] LTE init failed at SetModemFunctionality");
+                        return Err(QuectelError::CommandFailed);
                     }
                 }
+                _ => {
+                    error!("[Quectel] Invalid state in quectel_initialize: {:?}", state);
+                    return Err(QuectelError::CommandFailed);
+                }
+            }
+            Timer::after(Duration::from_secs(1)).await;
+        }
+    }
+
+    /// Initializes the LTE-specific configuration and MQTT connection.
+    ///
+    /// Executes the LTE setup sequence from EnableGps to MqttConnectBroker.
+    /// Assumes the modem is initialized via `quectel_initialize`.
+    ///
+    /// # Arguments
+    ///
+    /// * `mqtt_client_id` - The MQTT client identifier for connection.
+    /// * `ca_chain` - The CA certificate chain for MQTT authentication.
+    /// * `certificate` - The client certificate for MQTT authentication.
+    /// * `private_key` - The client private key for MQTT authentication.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` if LTE initialization completes successfully.
+    /// * `Err(QuectelError)` if any step fails.
+    pub async fn lte_initialize(
+        &mut self,
+        mqtt_client_id: &str,
+        ca_chain: &'static [u8],
+        certificate: &'static [u8],
+        private_key: &'static [u8],
+    ) -> Result<(), QuectelError> {
+        info!("[Quectel] Starting LTE initialization");
+        let mut state = State::UploadMqttCert;
+
+        loop {
+            match state {
                 State::UploadMqttCert => {
                     if self
                         .upload_mqtt_cert(ca_chain, certificate, private_key)
@@ -253,44 +275,84 @@ impl Quectel {
                     {
                         state = State::CheckNetworkRegistration;
                     } else {
-                        state = State::ErrorConnection;
+                        error!("[Quectel] LTE init failed at UploadMqttCert");
+                        return Err(QuectelError::CommandFailed);
                     }
                 }
                 State::CheckNetworkRegistration => {
                     if self.check_network_registration().await.is_ok() {
                         state = State::MqttOpenConnection;
                     } else {
-                        state = State::ErrorConnection;
+                        error!("[Quectel] LTE init failed at CheckNetworkRegistration");
+                        return Err(QuectelError::NetworkRegistrationFailed);
                     }
                 }
                 State::MqttOpenConnection => {
                     if self.mqtt_open_connection().await.is_ok() {
                         state = State::MqttConnectBroker;
                     } else {
-                        state = State::ErrorConnection;
+                        error!("[Quectel] LTE init failed at MqttOpenConnection");
+                        return Err(QuectelError::MqttConnectionFailed);
                     }
                 }
                 State::MqttConnectBroker => {
                     if self.mqtt_connect_broker().await.is_ok() {
-                        state = State::MqttPublishData;
+                        info!("[Quectel] LTE initialization completed");
+                        return Ok(());
                     } else {
-                        state = State::ErrorConnection;
+                        error!("[Quectel] LTE init failed at MqttConnectBroker");
+                        return Err(QuectelError::MqttConnectionFailed);
                     }
                 }
-                State::MqttPublishData => {
-                    if self
-                        .mqtt_publish_data(mqtt_client_id, gps_channel, can_channel)
-                        .await
-                        .is_ok()
-                    {
-                        state = State::MqttPublishData; // Loop in publishing state
-                    } else {
+                _ => {
+                    error!("[Quectel] Invalid state in lte_init: {:?}", state);
+                    return Err(QuectelError::CommandFailed);
+                }
+            }
+            Timer::after(Duration::from_secs(1)).await;
+        }
+    }
+
+    /// Runs the GPS data retrieval state machine.
+    ///
+    /// Continuously retrieves GPS data using `get_gps` and handles errors by transitioning
+    /// to the ErrorConnection state. Runs indefinitely with a 1-second delay between attempts.
+    ///
+    /// # Arguments
+    ///
+    /// * `mqtt_client_id` - The MQTT client identifier for GPS data.
+    /// * `gps_channel` - Channel for sending GPS-related `TripData`.
+    ///
+    /// # Returns
+    ///
+    /// This function runs indefinitely and does not return.
+    pub async fn gps_state_machine(
+        &mut self,
+        mqtt_client_id: &str,
+        gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
+    ) -> ! {
+        info!("[Quectel] Starting GPS state machine");
+        let mut state = State::GetGPSData;
+
+        loop {
+            match state {
+                State::GetGPSData => match self.get_gps(mqtt_client_id, gps_channel).await {
+                    Ok(trip_data) => {
+                        info!("[Quectel] GPS data retrieved: {:?}", trip_data);
+                        state = State::GetGPSData;
+                    }
+                    Err(e) => {
+                        error!("[Quectel] Failed to get GPS data: {:?}", e);
                         state = State::ErrorConnection;
                     }
-                }
+                },
                 State::ErrorConnection => {
                     let _ = self.error_connection().await;
-                    state = State::ResetHardware;
+                    state = State::GetGPSData;
+                }
+                _ => {
+                    error!("[Quectel] Invalid state in gps_state_machine: {:?}", state);
+                    state = State::ErrorConnection;
                 }
             }
             Timer::after(Duration::from_secs(1)).await;
@@ -311,7 +373,7 @@ impl Quectel {
         self.pen.set_low();
         Timer::after(Duration::from_secs(1)).await;
         self.pen.set_high();
-        Timer::after(Duration::from_secs(5)).await;
+        Timer::after(Duration::from_secs(5)).await; // need to wait for the modem to reset but i think we can reduce this
         Ok(())
     }
 
@@ -582,35 +644,64 @@ impl Quectel {
         Ok(())
     }
 
-    /// Publishes GPS and CAN data to the MQTT broker.
+    /// Retrieves GPS data from the modem and sends it to the GPS channel.
     ///
-    /// Publishes GPS (`TripData`) and CAN (`CanFrame`) data to their respective MQTT topics.
+    /// Checks if LTE is active, sends the `RetrieveGpsRmc` command to the modem, processes
+    /// the response to create a `TripData` struct, and sends it to the provided `gps_channel`.
     ///
     /// # Arguments
     ///
-    /// * `mqtt_client_id` - The MQTT client identifier for topic construction.
-    /// * `gps_channel` - Channel for receiving GPS-related `TripData`.
-    /// * `can_channel` - Channel for receiving CAN-related `TripData` (TWAI outbox).
+    /// * `mqtt_client_id` - The MQTT client identifier used for `device_id` and `trip_id`.
+    /// * `gps_channel` - Channel for sending GPS-related `TripData`.
     ///
     /// # Returns
     ///
-    /// * `Ok(())` if both GPS and CAN data are published successfully.
-    /// * `Err(QuectelError::MqttPublishFailed)` if publishing fails.
-    pub async fn mqtt_publish_data(
+    /// * `Ok(TripData)` if GPS data is successfully retrieved and sent.
+    /// * `Err(QuectelError::CommandFailed)` if the LTE is not active or the command fails.
+    pub async fn get_gps(
         &mut self,
         mqtt_client_id: &str,
         gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
-        can_channel: &'static TwaiOutbox,
-    ) -> Result<(), QuectelError> {
-        info!("[Quectel] Publishing MQTT Data");
-        if handle_publish_mqtt_data(&mut self.client, mqtt_client_id, gps_channel, can_channel)
-            .await
-        {
-            info!("[Quectel] MQTT data published successfully");
-            Ok(())
-        } else {
-            error!("[Quectel] MQTT publish failed");
-            Err(QuectelError::MqttPublishFailed)
+    ) -> Result<TripData, QuectelError> {
+        info!("[Quectel] Retrieving GPS data");
+
+        // Send RetrieveGpsRmc command
+        let trip_result = self.client.send(&RetrieveGpsRmc).await;
+        match trip_result {
+            Ok(res) => {
+                info!("[Quectel] GPS RMC data received: {res:?}");
+
+                // Convert UTC date and time to Unix timestamp
+                let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
+                let mut device_id = String::new();
+                let mut trip_id = String::new();
+                write!(&mut trip_id, "{mqtt_client_id}").unwrap();
+                write!(&mut device_id, "{mqtt_client_id}").unwrap();
+
+                // Create TripData with converted coordinates
+                let trip_data = TripData {
+                    device_id,
+                    trip_id,
+                    latitude: ((res.latitude as u64 / 100) as f64)
+                        + ((res.latitude % 100.0f64) / 60.0f64),
+                    longitude: ((res.longitude as u64 / 100) as f64)
+                        + ((res.longitude % 100.0f64) / 60.0f64),
+                    timestamp,
+                };
+
+                // Send TripData to channel
+                if gps_channel.try_send(trip_data.clone()).is_err() {
+                    error!("[Quectel] Failed to send TripData to channel");
+                } else {
+                    info!("[Quectel] GPS data sent to channel: {trip_data:?}");
+                }
+
+                Ok(trip_data)
+            }
+            Err(e) => {
+                error!("[Quectel] Failed to retrieve GPS data: {e:?}");
+                Err(QuectelError::CommandFailed)
+            }
         }
     }
 
@@ -1042,182 +1133,6 @@ pub async fn connect_mqtt_broker(
     }
 }
 
-/// Publishes GPS and CAN data to the MQTT broker.
-///
-/// Checks LTE connection status and, if active, retrieves GPS data via `RetrieveGpsRmc` and
-/// CAN data from `can_channel`. Serializes the data to JSON and publishes to MQTT topics.
-///
-/// # Arguments
-///
-/// * `client` - The AT command client for sending commands to the modem.
-/// * `mqtt_client_id` - The MQTT client identifier for topic construction.
-/// * `gps_channel` - Channel for sending GPS-related `TripData`.
-/// * `can_channel` - Channel for receiving CAN-related `CanFrame` data.
-///
-/// # Returns
-///
-/// * `true` if both GPS and CAN data are published successfully or if LTE is inactive.
-/// * `false` if serialization or publishing fails due to buffer overflow or AT command errors.
-pub async fn handle_publish_mqtt_data(
-    client: &mut Client<'static, UartTx<'static, Async>, 1024>,
-    mqtt_client_id: &str,
-    gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
-    can_channel: &'static TwaiOutbox,
-) -> bool {
-    // Check and update LTE connection status
-    if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_LTE.receiver().try_receive() {
-        IS_LTE.store(active_connection == ActiveConnection::Lte, Ordering::SeqCst);
-        info!("[LTE] Updated IS_LTE: {}", IS_LTE.load(Ordering::SeqCst));
-    }
-
-    // Skip publishing if LTE is not active
-    if !IS_LTE.load(Ordering::SeqCst) {
-        info!("[LTE] LTE not active, skipping MQTT publish");
-        return true;
-    }
-
-    let mut trip_topic: String<128> = String::new();
-    let mut trip_payload: String<1024> = String::new();
-    let mut buf: [u8; 1024] = [0u8; 1024];
-    let mut is_gps_success = false;
-    let mut is_can_success = false;
-
-    // Construct GPS topic
-    writeln!(
-        &mut trip_topic,
-        "channels/{mqtt_client_id}/messages/client/trip"
-    )
-    .unwrap();
-
-    // --- GPS Data ---
-    let trip_result = client.send(&RetrieveGpsRmc).await;
-
-    match trip_result {
-        Ok(res) => {
-            info!("[LTE] GPS RMC data received: {res:?}");
-            // Convert UTC date and time to Unix timestamp
-            let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
-            let mut device_id = String::new();
-            let mut trip_id = String::new();
-            write!(&mut trip_id, "{mqtt_client_id}").unwrap();
-            write!(&mut device_id, "{mqtt_client_id}").unwrap();
-
-            // Create TripData with converted coordinates
-            let trip_data = TripData {
-                device_id,
-                trip_id,
-                latitude: ((res.latitude as u64 / 100) as f64)
-                    + ((res.latitude % 100.0f64) / 60.0f64),
-                longitude: ((res.longitude as u64 / 100) as f64)
-                    + ((res.longitude % 100.0f64) / 60.0f64),
-                timestamp,
-            };
-
-            // Send TripData to channel
-            if gps_channel.try_send(trip_data.clone()).is_err() {
-                error!("[LTE] Failed to send TripData to channel");
-            } else {
-                info!("[LTE] GPS data sent to channel: {trip_data:?}");
-            }
-
-            // Serialize to JSON
-            if let Ok(len) = serde_json_core::to_slice(&trip_data, &mut buf) {
-                let json = core::str::from_utf8(&buf[..len])
-                    .unwrap_or_default()
-                    .replace('\"', "'");
-
-                if trip_payload.push_str(&json).is_err() {
-                    error!("[LTE] Payload buffer overflow");
-                    return false;
-                }
-
-                info!("[LTE] MQTT payload (GPS/trip): {trip_payload}");
-                if check_result(
-                    client
-                        .send(&MqttPublishExtended {
-                            tcp_connect_id: 0,
-                            msg_id: 0,
-                            qos: 0,
-                            retain: 0,
-                            topic: trip_topic,
-                            payload: trip_payload,
-                        })
-                        .await,
-                ) {
-                    info!("[LTE] Trip data published successfully");
-                    is_gps_success = true;
-                } else {
-                    error!("[LTE] Failed to publish trip data");
-                    is_gps_success = false;
-                }
-            } else {
-                error!("[LTE] Failed to serialize trip/GPS data");
-            }
-        }
-        Err(e) => {
-            warn!("[LTE] Failed to retrieve GPS data: {e:?}");
-        }
-    }
-
-    // --- CAN Data ---
-    let mut can_topic: String<128> = String::new();
-    let mut can_payload: String<1024> = String::new();
-    let mut buf: [u8; 1024] = [0u8; 1024];
-
-    if let Ok(frame) = can_channel.try_receive() {
-        info!("CAN data from LTE");
-        // Create CanFrame from received data
-        let can_data = CanFrame {
-            id: frame.id,
-            len: frame.len,
-            data: frame.data,
-        };
-
-        // Construct CAN topic
-        writeln!(
-            &mut can_topic,
-            "channels/{mqtt_client_id}/messages/client/can"
-        )
-        .unwrap();
-
-        // Serialize to JSON
-        if let Ok(len) = serde_json_core::to_slice(&can_data, &mut buf) {
-            let json = core::str::from_utf8(&buf[..len])
-                .unwrap_or_default()
-                .replace('\"', "'");
-
-            if can_payload.push_str(&json).is_err() {
-                error!("[LTE] Payload buffer overflow");
-                return false;
-            }
-
-            info!("[LTE] MQTT payload (CAN): {can_payload}");
-            if check_result(
-                client
-                    .send(&MqttPublishExtended {
-                        tcp_connect_id: 0,
-                        msg_id: 0,
-                        qos: 0,
-                        retain: 0,
-                        topic: can_topic,
-                        payload: can_payload,
-                    })
-                    .await,
-            ) {
-                info!("[LTE] CAN data published successfully");
-                is_can_success = true;
-            } else {
-                error!("[LTE] Failed to publish CAN data");
-                is_can_success = false;
-            }
-        } else {
-            error!("[LTE] Failed to serialize CAN data");
-        }
-    }
-
-    is_can_success && is_gps_success
-}
-
 /// Checks the result of an AT command execution.
 ///
 /// Logs the result and returns whether the command was successful.
@@ -1230,7 +1145,7 @@ pub async fn handle_publish_mqtt_data(
 ///
 /// * `true` if the command succeeded.
 /// * `false` if the command failed.
-fn check_result<T>(res: Result<T, atat::Error>) -> bool
+pub fn check_result<T>(res: Result<T, atat::Error>) -> bool
 where
     T: Debug,
 {
@@ -1264,4 +1179,13 @@ pub async fn quectel_rx_handler(
     mut reader: UartRx<'static, Async>,
 ) -> ! {
     ingress.read_from(&mut reader).await
+}
+
+#[embassy_executor::task]
+pub async fn gps_task(
+    mut quectel: Quectel,
+    mqtt_client_id: &'static str,
+    gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
+) -> ! {
+    quectel.gps_state_machine(mqtt_client_id, gps_channel).await
 }

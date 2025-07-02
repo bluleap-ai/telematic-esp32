@@ -1,185 +1,204 @@
-// use core::{fmt::Debug, fmt::Write, str::FromStr};
+use core::{fmt::Debug, fmt::Write, str::FromStr};
 
-// // use alloc::string::ToString;
-// use atat::{
-//     asynch::{AtatClient, Client},
-//     AtatIngress, DefaultDigester, Ingress, UrcChannel,
-// };
+// use alloc::string::ToString;
+use atat::{
+    asynch::{AtatClient, Client},
+    AtatIngress, DefaultDigester, Ingress, UrcChannel,
+};
 
-// use crate::cfg::net_cfg::*;
-// use crate::net::atcmd::general::*;
-// use crate::net::atcmd::response::*;
-// use crate::net::atcmd::Urc;
-// use crate::task::can::*;
-// use crate::task::netmgr::ConnectionEvent;
-// use crate::task::netmgr::{ActiveConnection, ACTIVE_CONNECTION_CHAN_LTE, CONN_EVENT_CHAN};
-// use crate::task::quectel::*;
-// use crate::util::time::utc_date_to_unix_timestamp;
-// use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-// use embassy_sync::channel::Channel;
-// // use embedded_can::Frame;
-// use esp_hal::{
-//     gpio::Output,
-//     uart::{UartRx, UartTx},
-//     Async,
-// };
-// // use esp_println::print;
-// use core::sync::atomic::{AtomicBool, Ordering};
-// use log::{debug, error, info, trace, warn};
-// use serde::{Deserialize, Serialize};
+use crate::cfg::net_cfg::*;
+use crate::net::atcmd::general::*;
+use crate::net::atcmd::response::*;
+use crate::net::atcmd::Urc;
+use crate::task::can::*;
+use crate::task::netmgr::ConnectionEvent;
+use crate::task::netmgr::{ActiveConnection, ACTIVE_CONNECTION_CHAN_LTE, CONN_EVENT_CHAN};
+use crate::task::quectel::*;
+use crate::util::time::utc_date_to_unix_timestamp;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::channel::Channel;
+// use embedded_can::Frame;
+use esp_hal::{
+    gpio::Output,
+    uart::{UartRx, UartTx},
+    Async,
+};
+// use esp_println::print;
+use core::sync::atomic::{AtomicBool, Ordering};
+use log::{debug, error, info, trace, warn};
+use serde::{Deserialize, Serialize};
 
-// async fn handle_publish_mqtt_data(
-//     client: &mut Client<'static, UartTx<'static, Async>, 1024>,
-//     mqtt_client_id: &str,
-//     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
-//     can_channel: &'static TwaiOutbox,
-// ) -> bool {
-//     if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_LTE.receiver().try_receive() {
-//         IS_LTE.store(active_connection == ActiveConnection::Lte, Ordering::SeqCst);
-//         info!("[LTE] Updated IS_LTE: {}", IS_LTE.load(Ordering::SeqCst));
-//     }
+// Atomic boolean for tracking LTE connection status
+static IS_LTE: AtomicBool = AtomicBool::new(false);
 
-//     // If LTE is not active, return false
-//     if !IS_LTE.load(Ordering::SeqCst) {
-//         info!("[LTE] LTE not active, skipping MQTT publish");
-//         return true;
-//     }
+/// Publishes GPS and CAN data to the MQTT broker.
+///
+/// Checks LTE connection status and, if active, retrieves GPS data via `RetrieveGpsRmc` and
+/// CAN data from `can_channel`. Serializes the data to JSON and publishes to MQTT topics.
+///
+/// # Arguments
+///
+/// * `client` - The AT command client for sending commands to the modem.
+/// * `mqtt_client_id` - The MQTT client identifier for topic construction.
+/// * `gps_channel` - Channel for sending GPS-related `TripData`.
+/// * `can_channel` - Channel for receiving CAN-related `CanFrame` data.
+///
+/// # Returns
+///
+/// * `true` if both GPS and CAN data are published successfully or if LTE is inactive.
+/// * `false` if serialization or publishing fails due to buffer overflow or AT command errors.
+async fn handle_publish_mqtt_data(
+    client: &mut Client<'static, UartTx<'static, Async>, 1024>,
+    mqtt_client_id: &str,
+    gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
+    can_channel: &'static TwaiOutbox,
+) -> bool {
+    if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_LTE.receiver().try_receive() {
+        IS_LTE.store(active_connection == ActiveConnection::Lte, Ordering::SeqCst);
+        info!("[LTE] Updated IS_LTE: {}", IS_LTE.load(Ordering::SeqCst));
+    }
 
-//     let mut trip_topic: heapless::String<128> = heapless::String::new();
-//     let mut trip_payload: heapless::String<1024> = heapless::String::new();
-//     let mut buf: [u8; 1024] = [0u8; 1024];
-//     let mut is_gps_success = false;
-//     let mut is_can_success = false;
+    // If LTE is not active, return false
+    if !IS_LTE.load(Ordering::SeqCst) {
+        info!("[LTE] LTE not active, skipping MQTT publish");
+        return true;
+    }
 
-//     writeln!(
-//         &mut trip_topic,
-//         "channels/{mqtt_client_id}/messages/client/trip"
-//     )
-//     .unwrap();
+    let mut trip_topic: heapless::String<128> = heapless::String::new();
+    let mut trip_payload: heapless::String<1024> = heapless::String::new();
+    let mut buf: [u8; 1024] = [0u8; 1024];
+    let mut is_gps_success = false;
+    let mut is_can_success = false;
 
-//     // --- GPS Data ---
-//     let trip_result = client.send(&RetrieveGpsRmc).await;
+    writeln!(
+        &mut trip_topic,
+        "channels/{mqtt_client_id}/messages/client/trip"
+    )
+    .unwrap();
 
-//     match trip_result {
-//         Ok(res) => {
-//             info!("[LTE] GPS RMC data received: {res:?}");
+    // --- GPS Data ---
+    let trip_result = client.send(&RetrieveGpsRmc).await;
 
-//             let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
-//             let mut device_id = heapless::String::new();
-//             let mut trip_id = heapless::String::new();
-//             write!(&mut trip_id, "{mqtt_client_id}").unwrap();
-//             write!(&mut device_id, "{mqtt_client_id}").unwrap();
+    match trip_result {
+        Ok(res) => {
+            info!("[LTE] GPS RMC data received: {res:?}");
 
-//             let trip_data = TripData {
-//                 device_id,
-//                 trip_id,
-//                 latitude: ((res.latitude as u64 / 100) as f64)
-//                     + ((res.latitude % 100.0f64) / 60.0f64),
-//                 longitude: ((res.longitude as u64 / 100) as f64)
-//                     + ((res.longitude % 100.0f64) / 60.0f64),
-//                 timestamp,
-//             };
+            let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
+            let mut device_id = heapless::String::new();
+            let mut trip_id = heapless::String::new();
+            write!(&mut trip_id, "{mqtt_client_id}").unwrap();
+            write!(&mut device_id, "{mqtt_client_id}").unwrap();
 
-//             if gps_channel.try_send(trip_data.clone()).is_err() {
-//                 error!("[LTE] Failed to send TripData to channel");
-//             } else {
-//                 info!("[LTE] GPS data sent to channel: {trip_data:?}");
-//             }
+            let trip_data = TripData {
+                device_id,
+                trip_id,
+                latitude: ((res.latitude as u64 / 100) as f64)
+                    + ((res.latitude % 100.0f64) / 60.0f64),
+                longitude: ((res.longitude as u64 / 100) as f64)
+                    + ((res.longitude % 100.0f64) / 60.0f64),
+                timestamp,
+            };
 
-//             // Serialize to JSON
-//             if let Ok(len) = serde_json_core::to_slice(&trip_data, &mut buf) {
-//                 let json = core::str::from_utf8(&buf[..len])
-//                     .unwrap_or_default()
-//                     .replace('\"', "'");
+            if gps_channel.try_send(trip_data.clone()).is_err() {
+                error!("[LTE] Failed to send TripData to channel");
+            } else {
+                info!("[LTE] GPS data sent to channel: {trip_data:?}");
+            }
 
-//                 if trip_payload.push_str(&json).is_err() {
-//                     error!("[LTE] Payload buffer overflow");
-//                     return false;
-//                 }
+            // Serialize to JSON
+            if let Ok(len) = serde_json_core::to_slice(&trip_data, &mut buf) {
+                let json = core::str::from_utf8(&buf[..len])
+                    .unwrap_or_default()
+                    .replace('\"', "'");
 
-//                 info!("[LTE] MQTT payload (GPS/trip): {trip_payload}");
-//                 if check_result(
-//                     client
-//                         .send(&MqttPublishExtended {
-//                             tcp_connect_id: 0,
-//                             msg_id: 0,
-//                             qos: 0,
-//                             retain: 0,
-//                             topic: trip_topic,
-//                             payload: trip_payload,
-//                         })
-//                         .await,
-//                 ) {
-//                     info!("[LTE] Trip data published successfully");
-//                 } else {
-//                     error!("[LTE] Failed to publish trip data");
-//                     is_gps_success = false;
-//                 }
-//             } else {
-//                 error!("[LTE] Failed to serialize trip/GPS data");
-//             }
-//         }
-//         Err(e) => {
-//             warn!("[LTE] Failed to retrieve GPS data: {e:?}");
-//         }
-//     }
+                if trip_payload.push_str(&json).is_err() {
+                    error!("[LTE] Payload buffer overflow");
+                    return false;
+                }
 
-//     // --- CAN Data ---
+                info!("[LTE] MQTT payload (GPS/trip): {trip_payload}");
+                if check_result(
+                    client
+                        .send(&MqttPublishExtended {
+                            tcp_connect_id: 0,
+                            msg_id: 0,
+                            qos: 0,
+                            retain: 0,
+                            topic: trip_topic,
+                            payload: trip_payload,
+                        })
+                        .await,
+                ) {
+                    info!("[LTE] Trip data published successfully");
+                } else {
+                    error!("[LTE] Failed to publish trip data");
+                    is_gps_success = false;
+                }
+            } else {
+                error!("[LTE] Failed to serialize trip/GPS data");
+            }
+        }
+        Err(e) => {
+            warn!("[LTE] Failed to retrieve GPS data: {e:?}");
+        }
+    }
 
-//     let mut can_topic: heapless::String<128> = heapless::String::new();
-//     let mut can_payload: heapless::String<1024> = heapless::String::new();
-//     let mut buf: [u8; 1024] = [0u8; 1024];
+    // --- CAN Data ---
 
-//     if let Ok(frame) = can_channel.try_receive() {
-//         info!("CAN data from LTE");
+    let mut can_topic: heapless::String<128> = heapless::String::new();
+    let mut can_payload: heapless::String<1024> = heapless::String::new();
+    let mut buf: [u8; 1024] = [0u8; 1024];
 
-//         // Prepare CAN topic
-//         let can_data = CanFrame {
-//             id: frame.id,
-//             len: frame.len,
-//             data: frame.data,
-//         };
+    if let Ok(frame) = can_channel.try_receive() {
+        info!("CAN data from LTE");
 
-//         writeln!(
-//             &mut can_topic,
-//             "channels/{mqtt_client_id}/messages/client/can"
-//         )
-//         .unwrap();
+        // Prepare CAN topic
+        let can_data = CanFrame {
+            id: frame.id,
+            len: frame.len,
+            data: frame.data,
+        };
 
-//         // Serialize to JSON
-//         if let Ok(len) = serde_json_core::to_slice(&can_data, &mut buf) {
-//             let json = core::str::from_utf8(&buf[..len])
-//                 .unwrap_or_default()
-//                 .replace('\"', "'");
+        writeln!(
+            &mut can_topic,
+            "channels/{mqtt_client_id}/messages/client/can"
+        )
+        .unwrap();
 
-//             if can_payload.push_str(&json).is_err() {
-//                 error!("[LTE] Payload buffer overflow");
-//                 return false;
-//             }
+        // Serialize to JSON
+        if let Ok(len) = serde_json_core::to_slice(&can_data, &mut buf) {
+            let json = core::str::from_utf8(&buf[..len])
+                .unwrap_or_default()
+                .replace('\"', "'");
 
-//             info!("[LTE] MQTT payload (CAN): {can_payload}");
-//             if check_result(
-//                 client
-//                     .send(&MqttPublishExtended {
-//                         tcp_connect_id: 0,
-//                         msg_id: 0,
-//                         qos: 0,
-//                         retain: 0,
-//                         topic: can_topic,
-//                         payload: can_payload,
-//                     })
-//                     .await,
-//             ) {
-//                 info!("[LTE] CAN data published successfully");
-//             } else {
-//                 error!("[LTE] Failed to publish CAN data");
-//                 is_can_success = false;
-//             }
-//         } else {
-//             error!("[LTE] Failed to serialize CAN data");
-//             // false
-//         }
-//     }
+            if can_payload.push_str(&json).is_err() {
+                error!("[LTE] Payload buffer overflow");
+                return false;
+            }
 
-//     is_can_success && is_gps_success
-// }
+            info!("[LTE] MQTT payload (CAN): {can_payload}");
+            if check_result(
+                client
+                    .send(&MqttPublishExtended {
+                        tcp_connect_id: 0,
+                        msg_id: 0,
+                        qos: 0,
+                        retain: 0,
+                        topic: can_topic,
+                        payload: can_payload,
+                    })
+                    .await,
+            ) {
+                info!("[LTE] CAN data published successfully");
+            } else {
+                error!("[LTE] Failed to publish CAN data");
+                is_can_success = false;
+            }
+        } else {
+            error!("[LTE] Failed to serialize CAN data");
+            // false
+        }
+    }
+
+    is_can_success && is_gps_success
+}

@@ -30,7 +30,7 @@ use esp_hal::{
     uart::{Config, Uart},
 };
 use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
-use log::info;
+use log::{error, info};
 use static_cell::StaticCell;
 use task::can::*;
 // use task::lte::TripData;
@@ -40,6 +40,7 @@ use task::netmgr::net_manager_task;
 #[cfg(feature = "ota")]
 use task::ota::ota_handler;
 use task::quectel::*;
+
 use task::wifi::*;
 pub type GpsOutbox = Channel<NoopRawMutex, TripData, 8>;
 static GPS_CHANNEL: StaticCell<GpsOutbox> = StaticCell::new();
@@ -174,22 +175,45 @@ async fn main(spawner: Spawner) -> ! {
     // ====================================
     let mut quectel = Quectel::new(client, quectel_pen_pin, quectel_dtr_pin, &URC_CHANNEL);
 
-    if let Err(e) = quectel.disable_echo_mode().await {
-        info!("[main] Failed to disable echo mode: {:?}", e);
-        // Handle error (e.g., retry, reset, or enter error state)
+    loop {
+        match quectel.quectel_initialize().await {
+            Ok(()) => {
+                info!("[main] Modem initialized successfully");
+                break;
+            }
+            Err(e) => {
+                error!("[main] Modem init failed: {:?}", e);
+                Timer::after(Duration::from_secs(5)).await;
+            }
+        }
     }
-    if let Err(e) = quectel.check_network_registration().await {
-        info!("[main] Failed to get network reg: {:?}", e);
-        // Handle error
+
+    // Initialize LTE
+    loop {
+        match quectel
+            .lte_initialize(
+                "telematics-control-unit",
+                b"ca_chain_content",
+                b"certificate_content",
+                b"private_key_content",
+            )
+            .await
+        {
+            Ok(()) => {
+                info!("[main] LTE initialized successfully");
+                break;
+            }
+            Err(e) => {
+                error!("[main] LTE init failed: {:?}", e);
+                Timer::after(Duration::from_secs(5)).await;
+            }
+        }
     }
-    if let Err(e) = quectel.enable_gps().await {
-        info!("[main] Failed to enable GPS: {:?}", e);
-        // Handle error
-    }
-    if let Err(e) = quectel.enable_assist_gps().await {
-        info!("[main] Failed to enable assist GPS: {:?}", e);
-        // Handle error
-    }
+
+    // Spawn GPS state machine task
+    spawner
+        .spawn(gps_task(quectel, "telematics-control-unit", gps_channel))
+        .unwrap();
 
     #[cfg(feature = "ota")]
     //wait until wifi connected

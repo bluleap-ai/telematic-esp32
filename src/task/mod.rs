@@ -3,7 +3,7 @@ pub mod can;
 pub mod lte;
 pub mod mqtt;
 pub mod netmgr;
-#[cfg(feature = "ota")]
+// #[cfg(feature = "ota")]
 pub mod ota;
 pub mod quectel;
 pub mod wifi;
