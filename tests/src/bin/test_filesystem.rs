@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
 
-#[path = "../../../src/mem/ex_flash.rs"]
-mod ex_flash;
+// #[path = "../../../src/mem/ex_flash.rs"]
+// mod ex_flash;
 #[allow(unused_imports)]
 #[path = "../../../src/mem/filesystem.rs"]
 mod filesystem;
@@ -19,9 +19,8 @@ use esp_hal::{
     },
     timer::timg::TimerGroup,
 };
-use filesystem::ex_flash::W25Q128FVSG;
-use filesystem::{FlashController, FlashRegion, FsError};
-use log::{error, info, warn};
+use filesystem::{FlashController, FlashRegion};
+use log::{error, info};
 
 #[esp_hal_embassy::main]
 async fn main(_spawner: Spawner) -> ! {
@@ -66,7 +65,7 @@ async fn main(_spawner: Spawner) -> ! {
     match fs.erase_region(FlashRegion::Certstore).await {
         Ok(()) => info!("✓ Certstore region erased successfully"),
         Err(e) => {
-            error!("✗ Failed to erase Certstore region: {:?}", e);
+            error!("✗ Failed to erase Certstore region: {e:?}");
             panic!("Cannot continue without erasing Certstore");
         }
     }
@@ -88,28 +87,28 @@ async fn main(_spawner: Spawner) -> ! {
         .await
     {
         Ok(()) => info!("✓ Firmware written successfully"),
-        Err(e) => error!("✗ Failed to write Firmware: {:?}", e),
+        Err(e) => error!("✗ Failed to write Firmware: {e:?}"),
     }
     match fs
         .write_file(FlashRegion::Certstore, "ca.crt", ca_chain)
         .await
     {
         Ok(()) => info!("✓ CA chain written successfully"),
-        Err(e) => error!("✗ Failed to write CA chain: {:?}", e),
+        Err(e) => error!("✗ Failed to write CA chain: {e:?}"),
     }
     match fs
         .write_file(FlashRegion::Certstore, "dvt.crt", cert_data)
         .await
     {
         Ok(()) => info!("✓ Certificate written successfully"),
-        Err(e) => error!("✗ Failed to write certificate: {:?}", e),
+        Err(e) => error!("✗ Failed to write certificate: {e:?}"),
     }
     match fs
         .write_file(FlashRegion::Certstore, "dvt.key", private_key)
         .await
     {
         Ok(()) => info!("✓ Private key written successfully"),
-        Err(e) => error!("✗ Failed to write private key: {:?}", e),
+        Err(e) => error!("✗ Failed to write private key: {e:?}"),
     }
     info!("=== Starting File Verification ===");
     let mut ok = true;
@@ -130,9 +129,9 @@ async fn main(_spawner: Spawner) -> ! {
     }
 
     let (capacity, page_size, sector_size) = fs.get_flash_info().await;
-    info!("Flash capacity: {} bytes", capacity);
-    info!("Page size: {} bytes", page_size);
-    info!("Sector size: {} bytes", sector_size);
+    info!("Flash capacity: {capacity} bytes");
+    info!("Page size: {page_size} bytes");
+    info!("Sector size: {sector_size} bytes");
 
     // Dump flash for debugging
 
@@ -149,7 +148,7 @@ async fn main(_spawner: Spawner) -> ! {
                 }
             }
         }
-        Err(e) => error!("Không duyệt được Certstore: {:?}", e),
+        Err(e) => error!("Không duyệt được Certstore: {e:?}"),
     }
     //Listfile in firmware
     match fs.list_files(FlashRegion::Firmware).await {
@@ -162,7 +161,7 @@ async fn main(_spawner: Spawner) -> ! {
                 }
             }
         }
-        Err(e) => error!("Không duyệt được Certstore: {:?}", e),
+        Err(e) => error!("Không duyệt được Certstore: {e:?}"),
     }
     loop {
         Timer::after(Duration::from_secs(5)).await;
