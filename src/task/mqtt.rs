@@ -11,7 +11,7 @@ use log::{error, info, warn};
 // use crate::task::lte::TripData;
 use embassy_sync::channel::Channel;
 
-use crate::task::quectel::*;
+use crate::task::modem::*;
 
 use crate::cfg::net_cfg::*;
 use crate::net::{dns::DnsBuilder, mqtt::MqttClient};
@@ -32,7 +32,7 @@ pub async fn mqtt_handler(
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
     mut sha: SHA,
     mut rsa: RSA,
-) {
+) -> ! {
     loop {
         if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_NET.receiver().try_receive() {
             IS_WIFI.store(

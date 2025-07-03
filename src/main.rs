@@ -36,11 +36,11 @@ use log::{error, info};
 use static_cell::StaticCell;
 use task::can::*;
 // use task::lte::TripData;
+use task::modem::*;
 use task::mqtt::*;
 use task::netmgr::net_manager_task;
 #[cfg(feature = "ota")]
 use task::ota::ota_handler;
-use task::quectel::*;
 // use task::lte::*;
 
 use task::wifi::*;
@@ -164,30 +164,19 @@ async fn main(spawner: Spawner) -> ! {
     //         peripherals.RSA,
     //     ))
     //     .unwrap();
-
     // spawner.spawn(net_manager_task(spawner)).unwrap();
-    // spawner.spawn(quectel_rx_handler(ingress, uart_rx)).ok();
-    // spawner
-    //     .spawn(quectel_tx_handler(
-    //         client,
-    //         quectel_pen_pin,
-    //         quectel_dtr_pin,
-    //         &URC_CHANNEL,
-    //         gps_channel,
-    //         channel,
-    //     ))
-    //     .ok();
+
     // ====================================
     // === Spawn RX handler Quectel ===
     // ====================================
-    spawner.spawn(quectel_rx_handler(ingress, uart_rx)).ok();
+    spawner.spawn(modem_rx_handler(ingress, uart_rx)).ok();
 
     // ====================================
     // === Quectel flow API driver ===
     // ====================================
-    let mut quectel = Quectel::new(client, quectel_pen_pin, quectel_dtr_pin, &URC_CHANNEL);
+    let mut quectel = Modem::new(client, quectel_pen_pin, quectel_dtr_pin, &URC_CHANNEL);
 
-    match quectel.quectel_initialize().await {
+    match quectel.modem_initialize().await {
         Ok(()) => {
             info!("[main] Modem initialized successfully");
         }
@@ -200,8 +189,8 @@ async fn main(spawner: Spawner) -> ! {
     let ca_chain = include_str!("../certx/crt.pem").as_bytes();
     let certificate = include_str!("../certx/dvt.crt").as_bytes();
     let private_key = include_str!("../certx/dvt.key").as_bytes();
-    // Initialize LTE
 
+    // Initialize LTE
     match quectel
         .lte_initialize(MQTT_CLIENT_ID, ca_chain, certificate, private_key)
         .await
@@ -223,6 +212,10 @@ async fn main(spawner: Spawner) -> ! {
             Timer::after(Duration::from_secs(5)).await;
         }
     }
+    // Spawn GPS state machine task
+    spawner
+        .spawn(gps_task(quectel, MQTT_CLIENT_ID, gps_channel))
+        .unwrap();
 
     match quectel.lte_handle_mqtt().await {
         Ok(()) => {
@@ -233,10 +226,6 @@ async fn main(spawner: Spawner) -> ! {
             Timer::after(Duration::from_secs(5)).await;
         }
     }
-    // Spawn GPS state machine task
-    spawner
-        .spawn(gps_task(quectel, MQTT_CLIENT_ID, gps_channel))
-        .unwrap();
 
     #[cfg(feature = "ota")]
     //wait until wifi connected

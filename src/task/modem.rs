@@ -30,9 +30,9 @@ const UNREGISTERED_SEARCHING: u8 = 2; // Modem searching for network
 const REGISTRATION_DENIED: u8 = 3; // Network registration denied
 const REGISTRATION_FAILED: u8 = 4; // Network registration failed
 
-/// Error types for Quectel modem operations.
+/// Error types for modem modem operations.
 #[derive(Debug)]
-pub enum QuectelError {
+pub enum ModemError {
     /// Indicates a failure in executing an AT command.
     CommandFailed,
     /// Indicates a failure to connect to the MQTT broker.
@@ -71,7 +71,7 @@ pub struct TripData {
     pub timestamp: u64,
 }
 
-/// States for the Quectel modem state machine.
+/// States for the modem modem state machine.
 #[derive(Debug)]
 pub enum State {
     /// Resets the modem hardware.
@@ -108,8 +108,8 @@ pub enum State {
     ErrorConnection,
 }
 
-/// Quectel modem driver for managing communication and GPS functionality.
-pub struct Quectel {
+/// modem modem driver for managing communication and GPS functionality.
+pub struct Modem {
     /// AT command client for sending commands to the modem.
     client: Client<'static, UartTx<'static, Async>, 1024>,
     /// GPIO output pin for controlling modem power.
@@ -122,8 +122,8 @@ pub struct Quectel {
     is_connected: bool,
 }
 
-impl Quectel {
-    /// Creates a new instance of the Quectel modem driver.
+impl Modem {
+    /// Creates a new instance of the modem modem driver.
     ///
     /// # Arguments
     ///
@@ -134,7 +134,7 @@ impl Quectel {
     ///
     /// # Returns
     ///
-    /// A new `Quectel` instance configured with the provided parameters.
+    /// A new `modem` instance configured with the provided parameters.
     pub fn new(
         client: Client<'static, UartTx<'static, Async>, 1024>,
         pen: Output<'static>,
@@ -150,7 +150,7 @@ impl Quectel {
         }
     }
 
-    /// Initializes the Quectel modem hardware and basic configuration.
+    /// Initializes the modem hardware and basic configuration.
     ///
     /// Executes the initialization sequence from ResetHardware to GetNetworkInfo.
     /// Returns on success or if an error occurs during initialization.
@@ -158,53 +158,53 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if initialization completes successfully.
-    /// * `Err(QuectelError)` if any step fails.
+    /// * `Err(ModemError)` if any step fails.
     ///
-    pub async fn quectel_initialize(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Starting LTE initialization");
+    pub async fn modem_initialize(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Starting LTE initialization");
         let mut state = State::ResetHardware;
 
         loop {
             match state {
                 State::ResetHardware => {
                     if self.reset_hardware().await.is_ok() {
-                        info!("[Quectel] Modem hardware reset successfully");
+                        info!("[modem] Modem hardware reset successfully");
                         state = State::DisableEchoMode;
                     } else {
-                        error!("[Quectel] Modem init failed at ResetHardware");
-                        return Err(QuectelError::CommandFailed);
+                        error!("[modem] Modem init failed at ResetHardware");
+                        return Err(ModemError::CommandFailed);
                     }
                 }
                 State::DisableEchoMode => {
                     if self.disable_echo_mode().await.is_ok() {
-                        info!("[Quectel] Echo mode disabled successfully");
+                        info!("[modem] Echo mode disabled successfully");
                         state = State::GetModelId;
                     } else {
-                        error!("[Quectel] Modem init failed at DisableEchoMode");
-                        return Err(QuectelError::CommandFailed);
+                        error!("[modem] Modem init failed at DisableEchoMode");
+                        return Err(ModemError::CommandFailed);
                     }
                 }
                 State::GetModelId => {
                     if self.get_model_id().await.is_ok() {
-                        info!("[Quectel] Model ID retrieved successfully");
+                        info!("[modem] Model ID retrieved successfully");
                         state = State::GetSoftwareVersion;
                     } else {
-                        error!("[Quectel] Modem init failed at GetModelId");
-                        return Err(QuectelError::CommandFailed);
+                        error!("[modem] Modem init failed at GetModelId");
+                        return Err(ModemError::CommandFailed);
                     }
                 }
                 State::GetSoftwareVersion => {
                     if self.get_software_version().await.is_ok() {
-                        info!("[Quectel] Software version retrieved successfully");
+                        info!("[modem] Software version retrieved successfully");
                         return Ok(());
                     } else {
-                        error!("[Quectel] Modem init failed at GetSoftwareVersion");
-                        return Err(QuectelError::CommandFailed);
+                        error!("[modem] Modem init failed at GetSoftwareVersion");
+                        return Err(ModemError::CommandFailed);
                     }
                 }
                 _ => {
-                    error!("[Quectel] Invalid state in quectel_initialize: {:?}", state);
-                    return Err(QuectelError::CommandFailed);
+                    error!("[modem] Invalid state in modem_initialize: {:?}", state);
+                    return Err(ModemError::CommandFailed);
                 }
             }
             Timer::after(Duration::from_secs(1)).await;
@@ -214,7 +214,7 @@ impl Quectel {
     /// Initializes the LTE-specific configuration and MQTT connection.
     ///
     /// Executes the LTE setup sequence from EnableGps to MqttConnectBroker.
-    /// Assumes the modem is initialized via `quectel_initialize`.
+    /// Assumes the modem is initialized via `modem_initialize`.
     ///
     /// # Arguments
     ///
@@ -226,54 +226,54 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if LTE initialization completes successfully.
-    /// * `Err(QuectelError)` if any step fails.
+    /// * `Err(ModemError)` if any step fails.
     pub async fn lte_initialize(
         &mut self,
         mqtt_client_id: &str,
         ca_chain: &'static [u8],
         certificate: &'static [u8],
         private_key: &'static [u8],
-    ) -> Result<(), QuectelError> {
-        info!("[Quectel] Starting modem initialization");
+    ) -> Result<(), ModemError> {
+        info!("[modem] Starting modem initialization");
         let mut state = State::GetSimCardStatus;
 
         loop {
             match state {
                 State::GetSimCardStatus => {
-                    info!("[Quectel] Checking SIM card status");
+                    info!("[modem] Checking SIM card status");
                     if self.get_sim_card_status().await.is_ok() {
                         state = State::GetNetworkSignalQuality;
                     } else {
-                        error!("[Quectel] Modem init failed at GetSimCardStatus");
-                        return Err(QuectelError::CommandFailed);
+                        error!("[modem] Modem init failed at GetSimCardStatus");
+                        return Err(ModemError::CommandFailed);
                     }
                 }
                 State::GetNetworkSignalQuality => {
-                    info!("[Quectel] Retrieving network signal quality");
+                    info!("[modem] Retrieving network signal quality");
                     if self.get_network_signal_quality().await.is_ok() {
                         state = State::GetNetworkInfo;
                     } else {
-                        error!("[Quectel] Modem init failed at GetNetworkSignalQuality");
-                        return Err(QuectelError::CommandFailed);
+                        error!("[modem] Modem init failed at GetNetworkSignalQuality");
+                        return Err(ModemError::CommandFailed);
                     }
                 }
                 State::GetNetworkInfo => {
-                    info!("[Quectel] Retrieving network information");
+                    info!("[modem] Retrieving network information");
                     if self.get_network_info().await.is_ok() {
                         state = State::SetModemFunctionality;
                     } else {
-                        error!("[Quectel] Modem init failed at GetNetworkInfo");
-                        return Err(QuectelError::CommandFailed);
+                        error!("[modem] Modem init failed at GetNetworkInfo");
+                        return Err(ModemError::CommandFailed);
                     }
                 }
                 State::SetModemFunctionality => {
-                    info!("[Quectel] Setting modem functionality");
+                    info!("[modem] Setting modem functionality");
                     if self.set_modem_functionality().await.is_ok() {
-                        info!("[Quectel] Modem initialization completed");
+                        info!("[modem] Modem initialization completed");
                         state = State::UploadMqttCert;
                     } else {
-                        error!("[Quectel] LTE init failed at SetModemFunctionality");
-                        return Err(QuectelError::CommandFailed);
+                        error!("[modem] LTE init failed at SetModemFunctionality");
+                        return Err(ModemError::CommandFailed);
                     }
                 }
                 State::UploadMqttCert => {
@@ -285,85 +285,85 @@ impl Quectel {
                         .await
                         .is_ok()
                     {
-                        info!("[Quectel] MQTT certificates uploaded successfully");
+                        info!("[modem] MQTT certificates uploaded successfully");
                         state = State::CheckNetworkRegistration;
                     } else {
-                        error!("[Quectel] LTE init failed at UploadMqttCert");
-                        return Err(QuectelError::CommandFailed);
+                        error!("[modem] LTE init failed at UploadMqttCert");
+                        return Err(ModemError::CommandFailed);
                     }
                 }
                 State::CheckNetworkRegistration => {
-                    info!("[Quectel] Checking network registration");
+                    info!("[modem] Checking network registration");
                     if self.check_network_registration().await.is_ok() {
                         // state = State::MqttOpenConnection;
                         return Ok(());
                     } else {
-                        error!("[Quectel] LTE init failed at CheckNetworkRegistration");
-                        return Err(QuectelError::NetworkRegistrationFailed);
+                        error!("[modem] LTE init failed at CheckNetworkRegistration");
+                        return Err(ModemError::NetworkRegistrationFailed);
                     }
                 }
                 _ => {
-                    error!("[Quectel] Invalid state in quectel_initialize: {:?}", state);
-                    return Err(QuectelError::CommandFailed);
+                    error!("[modem] Invalid state in modem_initialize: {:?}", state);
+                    return Err(ModemError::CommandFailed);
                 }
             }
             Timer::after(Duration::from_secs(1)).await;
         }
     }
-    pub async fn lte_handle_mqtt(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Starting LTE initialization");
+    pub async fn lte_handle_mqtt(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Starting LTE initialization");
         let mut state = State::MqttOpenConnection;
 
         loop {
             match state {
                 State::MqttOpenConnection => {
-                    info!("[Quectel] Opening MQTT connection");
+                    info!("[modem] Opening MQTT connection");
                     if self.mqtt_open_connection().await.is_ok() {
                         state = State::MqttConnectBroker;
                     } else {
-                        error!("[Quectel] LTE init failed at MqttOpenConnection");
-                        return Err(QuectelError::MqttConnectionFailed);
+                        error!("[modem] LTE init failed at MqttOpenConnection");
+                        return Err(ModemError::MqttConnectionFailed);
                     }
                 }
                 State::MqttConnectBroker => {
-                    info!("[Quectel] Connecting to MQTT broker");
+                    info!("[modem] Connecting to MQTT broker");
                     if self.mqtt_connect_broker().await.is_ok() {
-                        info!("[Quectel] LTE initialization completed");
+                        info!("[modem] LTE initialization completed");
                         return Ok(());
                     } else {
-                        error!("[Quectel] LTE init failed at MqttConnectBroker");
-                        return Err(QuectelError::MqttConnectionFailed);
+                        error!("[modem] LTE init failed at MqttConnectBroker");
+                        return Err(ModemError::MqttConnectionFailed);
                     }
                 }
                 _ => {
-                    error!("[Quectel] Invalid state in lte_init: {:?}", state);
-                    return Err(QuectelError::CommandFailed);
+                    error!("[modem] Invalid state in lte_init: {:?}", state);
+                    return Err(ModemError::CommandFailed);
                 }
             }
             Timer::after(Duration::from_secs(1)).await;
         }
     }
-    pub async fn gps_initialize(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Starting GPS state machine");
+    pub async fn gps_initialize(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Starting GPS state machine");
         let mut state = State::GetGPSData;
 
         loop {
             match state {
                 State::EnableGps => {
                     if self.enable_gps().await.is_ok() {
-                        info!("[Quectel] GPS enabled successfully");
+                        info!("[modem] GPS enabled successfully");
                         state = State::EnableAssistGps;
                     } else {
-                        error!("[Quectel] GPS init failed at EnableGps");
+                        error!("[modem] GPS init failed at EnableGps");
                         state = State::ErrorConnection;
                     }
                 }
                 State::EnableAssistGps => {
                     if self.enable_assist_gps().await.is_ok() {
-                        info!("[Quectel] Assist GPS enabled successfully");
+                        info!("[modem] Assist GPS enabled successfully");
                         return Ok(());
                     } else {
-                        error!("[Quectel] GPS init failed at EnableAssistGps");
+                        error!("[modem] GPS init failed at EnableAssistGps");
                         state = State::ErrorConnection;
                     }
                 }
@@ -372,7 +372,7 @@ impl Quectel {
                     state = State::GetGPSData;
                 }
                 _ => {
-                    error!("[Quectel] Invalid state in gps_state_machine: {:?}", state);
+                    error!("[modem] Invalid state in gps_state_machine: {:?}", state);
                     state = State::ErrorConnection;
                 }
             }
@@ -398,18 +398,18 @@ impl Quectel {
         mqtt_client_id: &str,
         gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
     ) -> ! {
-        info!("[Quectel] Starting GPS state machine");
+        info!("[modem] Starting GPS state machine");
         let mut state = State::GetGPSData;
 
         loop {
             match state {
                 State::GetGPSData => match self.get_gps(mqtt_client_id, gps_channel).await {
                     Ok(trip_data) => {
-                        info!("[Quectel] GPS data retrieved: {:?}", trip_data);
+                        info!("[modem] GPS data retrieved: {:?}", trip_data);
                         state = State::GetGPSData;
                     }
                     Err(e) => {
-                        error!("[Quectel] Failed to get GPS data: {:?}", e);
+                        error!("[modem] Failed to get GPS data: {:?}", e);
                         state = State::ErrorConnection;
                     }
                 },
@@ -418,7 +418,7 @@ impl Quectel {
                     state = State::GetGPSData;
                 }
                 _ => {
-                    error!("[Quectel] Invalid state in gps_state_machine: {:?}", state);
+                    error!("[modem] Invalid state in gps_state_machine: {:?}", state);
                     state = State::ErrorConnection;
                 }
             }
@@ -434,9 +434,9 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` on successful reset.
-    /// * `Err(QuectelError::CommandFailed)` if the reset fails.
-    pub async fn reset_hardware(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Reset Hardware");
+    /// * `Err(ModemError::CommandFailed)` if the reset fails.
+    pub async fn reset_hardware(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Reset Hardware");
         self.pen.set_low();
         Timer::after(Duration::from_secs(1)).await;
         self.pen.set_high();
@@ -452,13 +452,13 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if the command succeeds.
-    /// * `Err(QuectelError::CommandFailed)` if the command fails.
-    pub async fn disable_echo_mode(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Disable Echo Mode");
+    /// * `Err(ModemError::CommandFailed)` if the command fails.
+    pub async fn disable_echo_mode(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Disable Echo Mode");
         if check_result(self.client.send(&DisableEchoMode).await) {
             Ok(())
         } else {
-            Err(QuectelError::CommandFailed)
+            Err(ModemError::CommandFailed)
         }
     }
 
@@ -469,13 +469,13 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if the command succeeds.
-    /// * `Err(QuectelError::CommandFailed)` if the command fails.
-    pub async fn get_model_id(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Get Model Id");
+    /// * `Err(ModemError::CommandFailed)` if the command fails.
+    pub async fn get_model_id(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Get Model Id");
         if check_result(self.client.send(&GetModelId).await) {
             Ok(())
         } else {
-            Err(QuectelError::CommandFailed)
+            Err(ModemError::CommandFailed)
         }
     }
 
@@ -486,13 +486,13 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if the command succeeds.
-    /// * `Err(QuectelError::CommandFailed)` if the command fails.
-    pub async fn get_software_version(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Get Software Version");
+    /// * `Err(ModemError::CommandFailed)` if the command fails.
+    pub async fn get_software_version(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Get Software Version");
         if check_result(self.client.send(&GetSoftwareVersion).await) {
             Ok(())
         } else {
-            Err(QuectelError::CommandFailed)
+            Err(ModemError::CommandFailed)
         }
     }
 
@@ -503,13 +503,13 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if the command succeeds.
-    /// * `Err(QuectelError::CommandFailed)` if the command fails.
-    pub async fn get_sim_card_status(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Get Sim Card Status");
+    /// * `Err(ModemError::CommandFailed)` if the command fails.
+    pub async fn get_sim_card_status(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Get Sim Card Status");
         if check_result(self.client.send(&GetSimCardStatus).await) {
             Ok(())
         } else {
-            Err(QuectelError::CommandFailed)
+            Err(ModemError::CommandFailed)
         }
     }
 
@@ -520,12 +520,12 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if the command succeeds or fails (logs failure but does not propagate error).
-    pub async fn get_network_signal_quality(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Get Network Signal Quality");
+    pub async fn get_network_signal_quality(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Get Network Signal Quality");
         if check_result(self.client.send(&GetNetworkSignalQuality).await) {
             Ok(())
         } else {
-            info!("[Quectel] Failed to get network signal quality");
+            info!("[modem] Failed to get network signal quality");
             Ok(())
         }
     }
@@ -537,13 +537,13 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if the command succeeds.
-    /// * `Err(QuectelError::CommandFailed)` if the command fails.
-    pub async fn get_network_info(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Get Network Info");
+    /// * `Err(ModemError::CommandFailed)` if the command fails.
+    pub async fn get_network_info(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Get Network Info");
         if check_result(self.client.send(&GetNetworkInfo).await) {
             Ok(())
         } else {
-            Err(QuectelError::CommandFailed)
+            Err(ModemError::CommandFailed)
         }
     }
 
@@ -554,13 +554,13 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if the command succeeds.
-    /// * `Err(QuectelError::CommandFailed)` if the command fails.
-    pub async fn enable_gps(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Enable GPS");
+    /// * `Err(ModemError::CommandFailed)` if the command fails.
+    pub async fn enable_gps(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Enable GPS");
         if check_result(self.client.send(&EnableGpsFunc).await) {
             Ok(())
         } else {
-            Err(QuectelError::CommandFailed)
+            Err(ModemError::CommandFailed)
         }
     }
 
@@ -571,13 +571,13 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if the command succeeds.
-    /// * `Err(QuectelError::CommandFailed)` if the command fails.
-    pub async fn enable_assist_gps(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Enable Assist GPS");
+    /// * `Err(ModemError::CommandFailed)` if the command fails.
+    pub async fn enable_assist_gps(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Enable Assist GPS");
         if check_result(self.client.send(&EnableAssistGpsFunc).await) {
             Ok(())
         } else {
-            Err(QuectelError::CommandFailed)
+            Err(ModemError::CommandFailed)
         }
     }
 
@@ -588,9 +588,9 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if the command succeeds.
-    /// * `Err(QuectelError::CommandFailed)` if the command fails.
-    pub async fn set_modem_functionality(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Set Modem Functionality");
+    /// * `Err(ModemError::CommandFailed)` if the command fails.
+    pub async fn set_modem_functionality(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Set Modem Functionality");
         if check_result(
             self.client
                 .send(&SetUeFunctionality {
@@ -600,7 +600,7 @@ impl Quectel {
         ) {
             Ok(())
         } else {
-            Err(QuectelError::CommandFailed)
+            Err(ModemError::CommandFailed)
         }
     }
 
@@ -617,14 +617,14 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if the upload succeeds.
-    /// * `Err(QuectelError::CommandFailed)` if the upload fails.
+    /// * `Err(ModemError::CommandFailed)` if the upload fails.
     pub async fn upload_mqtt_cert(
         &mut self,
         ca_chain: &'static [u8],
         certificate: &'static [u8],
         private_key: &'static [u8],
-    ) -> Result<(), QuectelError> {
-        info!("[Quectel] Upload Files");
+    ) -> Result<(), ModemError> {
+        info!("[modem] Upload Files");
         if upload_mqtt_cert_files(
             &mut self.client,
             self.urc_channel,
@@ -636,8 +636,8 @@ impl Quectel {
         {
             Ok(())
         } else {
-            error!("[Quectel] File upload failed, resetting hardware");
-            Err(QuectelError::CommandFailed)
+            error!("[modem] File upload failed, resetting hardware");
+            Err(ModemError::CommandFailed)
         }
     }
 
@@ -649,9 +649,9 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if the modem is registered (home or roaming).
-    /// * `Err(QuectelError::NetworkRegistrationFailed)` if registration fails or times out.
-    pub async fn check_network_registration(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Check Network Registration");
+    /// * `Err(ModemError::NetworkRegistrationFailed)` if registration fails or times out.
+    pub async fn check_network_registration(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Check Network Registration");
         if check_network_registration(&mut self.client).await {
             if !self.is_connected {
                 let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteRegistered);
@@ -663,8 +663,8 @@ impl Quectel {
                 let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteUnregistered);
                 self.is_connected = false;
             }
-            error!("[Quectel] Network registration failed, resetting hardware");
-            Err(QuectelError::NetworkRegistrationFailed)
+            error!("[modem] Network registration failed, resetting hardware");
+            Err(ModemError::NetworkRegistrationFailed)
         }
     }
 
@@ -675,16 +675,16 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if the connection is opened successfully.
-    /// * `Err(QuectelError::MqttConnectionFailed)` if the connection fails.
-    pub async fn mqtt_open_connection(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Opening MQTT connection");
+    /// * `Err(ModemError::MqttConnectionFailed)` if the connection fails.
+    pub async fn mqtt_open_connection(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Opening MQTT connection");
         open_mqtt_connection(&mut self.client, self.urc_channel)
             .await
             .map_err(|e| {
-                error!("[Quectel] Failed to open MQTT connection: {e:?}");
-                QuectelError::MqttConnectionFailed
+                error!("[modem] Failed to open MQTT connection: {e:?}");
+                ModemError::MqttConnectionFailed
             })?;
-        info!("[Quectel] MQTT connection opened successfully");
+        info!("[modem] MQTT connection opened successfully");
         Ok(())
     }
 
@@ -696,17 +696,17 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` if the connection is established.
-    /// * `Err(QuectelError::MqttConnectionFailed)` if the connection fails.
-    pub async fn mqtt_connect_broker(&mut self) -> Result<(), QuectelError> {
-        info!("[Quectel] Connecting to MQTT broker");
+    /// * `Err(ModemError::MqttConnectionFailed)` if the connection fails.
+    pub async fn mqtt_connect_broker(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Connecting to MQTT broker");
         connect_mqtt_broker(&mut self.client, self.urc_channel)
             .await
             .map_err(|e| {
-                error!("[Quectel] MQTT connection failed: {e:?}");
+                error!("[modem] MQTT connection failed: {e:?}");
                 let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
-                QuectelError::MqttConnectionFailed
+                ModemError::MqttConnectionFailed
             })?;
-        info!("[Quectel] MQTT connection established");
+        info!("[modem] MQTT connection established");
         let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected);
         Ok(())
     }
@@ -724,19 +724,19 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(TripData)` if GPS data is successfully retrieved and sent.
-    /// * `Err(QuectelError::CommandFailed)` if the LTE is not active or the command fails.
+    /// * `Err(ModemError::CommandFailed)` if the LTE is not active or the command fails.
     pub async fn get_gps(
         &mut self,
         mqtt_client_id: &str,
         gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
-    ) -> Result<TripData, QuectelError> {
-        info!("[Quectel] Retrieving GPS data");
+    ) -> ! {
+        info!("[modem] Retrieving GPS data");
 
         // Send RetrieveGpsRmc command
         let trip_result = self.client.send(&RetrieveGpsRmc).await;
         match trip_result {
             Ok(res) => {
-                info!("[Quectel] GPS RMC data received: {res:?}");
+                info!("[modem] GPS RMC data received: {res:?}");
 
                 // Convert UTC date and time to Unix timestamp
                 let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
@@ -758,16 +758,16 @@ impl Quectel {
 
                 // Send TripData to channel
                 if gps_channel.try_send(trip_data.clone()).is_err() {
-                    error!("[Quectel] Failed to send TripData to channel");
+                    error!("[modem] Failed to send TripData to channel");
                 } else {
-                    info!("[Quectel] GPS data sent to channel: {trip_data:?}");
+                    info!("[modem] GPS data sent to channel: {trip_data:?}");
                 }
 
                 Ok(trip_data)
             }
             Err(e) => {
-                error!("[Quectel] Failed to retrieve GPS data: {e:?}");
-                Err(QuectelError::CommandFailed)
+                error!("[modem] Failed to retrieve GPS data: {e:?}");
+                Err(ModemError::CommandFailed)
             }
         }
     }
@@ -780,12 +780,12 @@ impl Quectel {
     /// # Returns
     ///
     /// * `Ok(())` after initiating the reset process.
-    pub async fn error_connection(&mut self) -> Result<(), QuectelError> {
+    pub async fn error_connection(&mut self) -> Result<(), ModemError> {
         if self.is_connected {
             let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
             self.is_connected = false;
         }
-        error!("[Quectel] System in error state - attempting recovery");
+        error!("[modem] System in error state - attempting recovery");
         Timer::after(Duration::from_secs(5)).await;
         self.reset_hardware().await
     }
@@ -998,11 +998,11 @@ pub async fn check_network_registration(
     while start_time.elapsed() < timeout {
         match client.send(&GetEPSNetworkRegistrationStatus {}).await {
             Ok(status) => {
-                log::info!("[Quectel] EPS network registration status: {status:?}");
+                log::info!("[modem] EPS network registration status: {status:?}");
                 match status.stat {
                     REGISTERED_HOME => {
                         let elapsed = start_time.elapsed().as_secs();
-                        info!("[Quectel] Registered (Home) after {elapsed} seconds");
+                        info!("[modem] Registered (Home) after {elapsed} seconds");
                         return true; // Successfully registered
                     }
                     UNREGISTERED_SEARCHING => {
@@ -1010,33 +1010,33 @@ pub async fn check_network_registration(
                         Timer::after(Duration::from_secs(1)).await;
                     }
                     REGISTRATION_DENIED => {
-                        error!("[Quectel] Registration denied");
+                        error!("[modem] Registration denied");
                         return false; // Registration denied
                     }
                     REGISTRATION_FAILED => {
-                        error!("[Quectel] Registration failed");
+                        error!("[modem] Registration failed");
                         return false; // Registration failed
                     }
                     REGISTERED_ROAMING => {
                         let elapsed = start_time.elapsed().as_secs();
-                        info!("[Quectel] Registered (Roaming) after {elapsed} seconds");
+                        info!("[modem] Registered (Roaming) after {elapsed} seconds");
                         return true; // Successfully registered
                     }
                     _ => {
-                        error!("[Quectel] Unknown registration status: {}", status.stat);
+                        error!("[modem] Unknown registration status: {}", status.stat);
                         return false; // Unknown status
                     }
                 }
             }
             Err(e) => {
-                error!("[Quectel] Failed to get EPS network registration status: {e:?}");
+                error!("[modem] Failed to get EPS network registration status: {e:?}");
                 return false; // Error occurred
             }
         }
     }
 
     // Timeout reached without successful registration
-    error!("[Quectel] Network registration timed out");
+    error!("[modem] Network registration timed out");
     false
 }
 
@@ -1070,7 +1070,7 @@ pub async fn open_mqtt_connection(
         .await
         .map_err(|_| MqttConnectError::CommandFailed)?; // Optionally log the error here for more info
 
-    info!("[Quectel] MQTT open command sent, waiting for response...");
+    info!("[modem] MQTT open command sent, waiting for response...");
 
     let mut subscriber = urc_channel
         .subscribe()
@@ -1082,7 +1082,7 @@ pub async fn open_mqtt_connection(
     loop {
         // Check timeout first
         if start.elapsed() >= TIMEOUT {
-            error!("[Quectel] MQTT open timed out");
+            error!("[modem] MQTT open timed out");
             return Err(MqttConnectError::Timeout);
         }
 
@@ -1091,21 +1091,21 @@ pub async fn open_mqtt_connection(
         info!("fuckkkk");
         match subscriber.try_next_message_pure() {
             Some(Urc::MqttOpen(response)) => {
-                info!("[Quectel] Received MQTT open response: {response:?}");
+                info!("[modem] Received MQTT open response: {response:?}");
                 return match response.result {
                     0 => Ok(()),
                     code => {
-                        error!("[Quectel] Modem reported error code: {}", code as u8);
+                        error!("[modem] Modem reported error code: {}", code as u8);
                         Err(MqttConnectError::ModemError(code as u8))
                     }
                 };
             }
             Some(other_urc) => {
-                info!("[Quectel] Received unrelated URC: {other_urc:?}");
+                info!("[modem] Received unrelated URC: {other_urc:?}");
                 // Continue waiting for MQTT open response
             }
             None => {
-                warn!("[Quectel] No URC received yet...");
+                warn!("[modem] No URC received yet...");
             }
         }
     }
@@ -1145,7 +1145,7 @@ pub async fn connect_mqtt_broker(
 
     // Send connect command with retries
     for attempt in 1..=MAX_RETRIES {
-        info!("[Quectel] MQTT connect attempt {attempt}/{MAX_RETRIES}");
+        info!("[modem] MQTT connect attempt {attempt}/{MAX_RETRIES}");
 
         match client
             .send(&MqttConnect {
@@ -1158,11 +1158,11 @@ pub async fn connect_mqtt_broker(
         {
             Ok(_) => break,
             Err(e) if attempt == MAX_RETRIES => {
-                error!("[Quectel] Final connect attempt failed: {e:?}");
+                error!("[modem] Final connect attempt failed: {e:?}");
                 return Err(MqttConnectError::CommandFailed);
             }
             Err(e) => {
-                warn!("[Quectel] Connect attempt failed: {e:?} - retrying");
+                warn!("[modem] Connect attempt failed: {e:?} - retrying");
                 embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
             }
         }
@@ -1174,24 +1174,24 @@ pub async fn connect_mqtt_broker(
         .map_err(|_| MqttConnectError::CommandFailed)?;
     let start = embassy_time::Instant::now();
 
-    info!("[Quectel] Waiting for MQTT FUCK response...");
+    info!("[modem] Waiting for MQTT FUCK response...");
 
     loop {
         if start.elapsed() > RESPONSE_TIMEOUT {
-            error!("[Quectel] MQTT connect timeout");
+            error!("[modem] MQTT connect timeout");
             return Err(MqttConnectError::Timeout);
         }
-        error!("[Quectel] Waiting for MQTT FUCK response...");
+        error!("[modem] Waiting for MQTT FUCK response...");
 
         embassy_time::Timer::after(embassy_time::Duration::from_millis(100)).await;
 
         match subscriber.try_next_message_pure() {
             Some(Urc::MqttConnect(response)) => {
-                info!("[Quectel] Received MQTT connect response: {response:?}");
+                info!("[modem] Received MQTT connect response: {response:?}");
                 return match response.result {
                     0 => Ok(()),
                     code => {
-                        error!("[Quectel] Modem connection error: {code}");
+                        error!("[modem] Modem connection error: {code}");
                         Err(MqttConnectError::ModemError(code))
                     }
                 };
@@ -1224,11 +1224,11 @@ where
 {
     match res {
         Ok(value) => {
-            info!("[Quectel] \t Command succeeded: {value:?}");
+            info!("[modem] \t Command succeeded: {value:?}");
             true
         }
         Err(e) => {
-            error!("[Quectel] Failed to send AT command: {e:?}");
+            error!("[modem] Failed to send AT command: {e:?}");
             false
         }
     }
@@ -1247,7 +1247,7 @@ where
 ///
 /// This function runs indefinitely and does not return.
 #[embassy_executor::task]
-pub async fn quectel_rx_handler(
+pub async fn modem_rx_handler(
     mut ingress: Ingress<'static, DefaultDigester<Urc>, Urc, 1024, 128, 3>,
     mut reader: UartRx<'static, Async>,
 ) -> ! {
@@ -1256,9 +1256,9 @@ pub async fn quectel_rx_handler(
 
 #[embassy_executor::task]
 pub async fn gps_task(
-    mut quectel: Quectel,
+    mut modem: modem,
     mqtt_client_id: &'static str,
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
 ) -> ! {
-    quectel.gps_state_machine(mqtt_client_id, gps_channel).await
+    modem.get_gps(mqtt_client_id, gps_channel).await
 }
