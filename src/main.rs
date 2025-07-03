@@ -35,19 +35,17 @@ use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
 use log::{error, info};
 use static_cell::StaticCell;
 use task::can::*;
-// use task::lte::TripData;
 use task::modem::*;
 use task::mqtt::*;
 use task::netmgr::net_manager_task;
 #[cfg(feature = "ota")]
 use task::ota::ota_handler;
-// use task::lte::*;
-
 use task::wifi::*;
+
 pub type GpsOutbox = Channel<NoopRawMutex, TripData, 8>;
 static GPS_CHANNEL: StaticCell<GpsOutbox> = StaticCell::new();
 macro_rules! mk_static {
-    ($t:ty,$val:expr) => {{
+    ($t:ty, $val:expr) => {{
         static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
         #[deny(unused_attributes)]
         let x = STATIC_CELL.uninit().write(($val));
@@ -74,7 +72,7 @@ async fn main(spawner: Spawner) -> ! {
         init(timg0.timer0, trng.rng, peripherals.RADIO_CLK).unwrap()
     );
     let wifi = peripherals.WIFI;
-    let (wifi_interface, controller) =
+    let (_wifi_interface, _controller) =
         esp_wifi::wifi::new_with_mode(init, wifi, WifiStaDevice).unwrap();
     let config = embassy_net::Config::dhcpv4(Default::default());
     #[cfg(feature = "wdg")]
@@ -87,13 +85,13 @@ async fn main(spawner: Spawner) -> ! {
 
     let seed = 1234;
 
-    let (stack, runner) = embassy_net::new(
-        wifi_interface,
+    let (_stack, _runner) = embassy_net::new(
+        _wifi_interface,
         config,
         mk_static!(StackResources<3>, StackResources::<3>::new()),
         seed,
     );
-    let stack = &*mk_static!(Stack, stack);
+    let _stack = &*mk_static!(Stack, _stack);
 
     // ==============================
     // === LTE UART + Quectel ===
@@ -153,11 +151,11 @@ async fn main(spawner: Spawner) -> ! {
     let gps_channel = &*GPS_CHANNEL.init(Channel::new());
 
     spawner.spawn(can_receiver(can_rx, channel)).unwrap();
-    // spawner.spawn(connection(controller)).unwrap();
-    // spawner.spawn(net_task(runner)).unwrap();
+    // spawner.spawn(connection(_controller)).unwrap();
+    // spawner.spawn(net_task(_runner)).unwrap();
     // spawner
     //     .spawn(mqtt_handler(
-    //         stack,
+    //         _stack,
     //         channel,
     //         gps_channel,
     //         peripherals.SHA,
@@ -196,47 +194,48 @@ async fn main(spawner: Spawner) -> ! {
         .await
     {
         Ok(()) => {
-            info!("[main] Modem initialized successfully");
+            info!("[main] LTE initialized successfully");
         }
         Err(e) => {
-            error!("[main] Modem init failed: {:?}", e);
+            error!("[main] LTE init failed: {:?}", e);
             Timer::after(Duration::from_secs(5)).await;
         }
     }
     match quectel.gps_initialize().await {
         Ok(()) => {
-            info!("[main] LTE initialized successfully");
+            info!("[main] GPS initialized successfully");
         }
         Err(e) => {
-            error!("[main] LTE init failed: {:?}", e);
+            error!("[main] GPS init failed: {:?}", e);
             Timer::after(Duration::from_secs(5)).await;
         }
     }
-    // Spawn GPS state machine task
-    spawner
-        .spawn(gps_task(quectel, MQTT_CLIENT_ID, gps_channel))
-        .unwrap();
+    // Spawn GPS state machine task with reference
+    // spawner
+    //     .spawn(gps_task(&mut quectel, MQTT_CLIENT_ID, gps_channel))
+    //     .unwrap();
 
+    // Use LTE MQTT handling (after ensuring quectel is not moved)
     match quectel.lte_handle_mqtt().await {
         Ok(()) => {
-            info!("[main] LTE initialized successfully");
+            info!("[main] LTE MQTT initialized successfully");
         }
         Err(e) => {
-            error!("[main] LTE init failed: {:?}", e);
+            error!("[main] LTE MQTT init failed: {:?}", e);
             Timer::after(Duration::from_secs(5)).await;
         }
     }
 
     #[cfg(feature = "ota")]
-    //wait until wifi connected
+    // Wait until Wi-Fi connected
     {
         loop {
-            if stack.is_link_up() {
+            if _stack.is_link_up() {
                 break;
             }
             Timer::after(Duration::from_millis(500)).await;
         }
-        spawner.spawn(ota_handler(spawner, trng, stack)).unwrap();
+        spawner.spawn(ota_handler(spawner, trng, _stack)).unwrap();
     }
 
     // WDG feed task

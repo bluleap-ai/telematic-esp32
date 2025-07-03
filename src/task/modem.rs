@@ -379,6 +379,7 @@ impl Modem {
             Timer::after(Duration::from_secs(1)).await;
         }
     }
+
     /// Runs the GPS data retrieval state machine.
     ///
     /// Continuously retrieves GPS data using `get_gps` and handles errors by transitioning
@@ -392,7 +393,6 @@ impl Modem {
     /// # Returns
     ///
     /// This function runs indefinitely and does not return.
-    ///
     pub async fn gps_state_machine(
         &mut self,
         mqtt_client_id: &str,
@@ -403,16 +403,10 @@ impl Modem {
 
         loop {
             match state {
-                State::GetGPSData => match self.get_gps(mqtt_client_id, gps_channel).await {
-                    Ok(trip_data) => {
-                        info!("[modem] GPS data retrieved: {:?}", trip_data);
-                        state = State::GetGPSData;
-                    }
-                    Err(e) => {
-                        error!("[modem] Failed to get GPS data: {:?}", e);
-                        state = State::ErrorConnection;
-                    }
-                },
+                State::GetGPSData => {
+                    self.get_gps(mqtt_client_id, gps_channel).await;
+                    state = State::GetGPSData; // Continue looping
+                }
                 State::ErrorConnection => {
                     let _ = self.error_connection().await;
                     state = State::GetGPSData;
@@ -723,18 +717,16 @@ impl Modem {
     ///
     /// # Returns
     ///
-    /// * `Ok(TripData)` if GPS data is successfully retrieved and sent.
-    /// * `Err(ModemError::CommandFailed)` if the LTE is not active or the command fails.
+    /// * `()` after processing the GPS data.
     pub async fn get_gps(
         &mut self,
         mqtt_client_id: &str,
         gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
-    ) -> ! {
+    ) {
         info!("[modem] Retrieving GPS data");
 
         // Send RetrieveGpsRmc command
-        let trip_result = self.client.send(&RetrieveGpsRmc).await;
-        match trip_result {
+        match self.client.send(&RetrieveGpsRmc).await {
             Ok(res) => {
                 info!("[modem] GPS RMC data received: {res:?}");
 
@@ -762,12 +754,9 @@ impl Modem {
                 } else {
                     info!("[modem] GPS data sent to channel: {trip_data:?}");
                 }
-
-                Ok(trip_data)
             }
             Err(e) => {
                 error!("[modem] Failed to retrieve GPS data: {e:?}");
-                Err(ModemError::CommandFailed)
             }
         }
     }
@@ -1252,13 +1241,4 @@ pub async fn modem_rx_handler(
     mut reader: UartRx<'static, Async>,
 ) -> ! {
     ingress.read_from(&mut reader).await
-}
-
-#[embassy_executor::task]
-pub async fn gps_task(
-    mut modem: modem,
-    mqtt_client_id: &'static str,
-    gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
-) -> ! {
-    modem.get_gps(mqtt_client_id, gps_channel).await
 }
