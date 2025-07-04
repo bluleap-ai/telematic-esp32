@@ -115,6 +115,8 @@ async fn main(_spawner: Spawner) -> ! {
                 ExFlashError::LenInvalid => error!("Invalid data length"),
                 ExFlashError::SpiError => error!("SPI communication error"),
                 ExFlashError::WriteEnableFailed => error!("Could not enable write"),
+                ExFlashError::Timeout => error!("Took too long"),
+                ExFlashError::WriteFailed => error!("Failed to write data"),
                 //_ => error!("Other write error"),
             }
         }

@@ -37,6 +37,8 @@ pub enum ExFlashError {
     LenInvalid,
     SpiError,
     WriteEnableFailed,
+    Timeout,
+    WriteFailed,
     //DeviceBusy,
     //WriteProtected,
     //BufferTooLarge,
