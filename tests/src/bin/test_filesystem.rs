@@ -132,7 +132,7 @@ async fn main(_spawner: Spawner) -> ! {
     info!("Page size: {page_size} bytes");
     info!("Sector size: {sector_size} bytes");
 
-    // Dump flash for debugging
+    //Dump flash for debugging
 
     info!("=== Flash File System Test Completed ===");
     //List file in CertStore
