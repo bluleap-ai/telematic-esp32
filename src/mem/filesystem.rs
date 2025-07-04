@@ -15,10 +15,11 @@
 //
 // File format inside `Certstore`:
 // ```text
-// | name_len | name (UTF-8) | data_len (LE u32) | data ... | (pad with 0xFF) |
+// | name_len | name (UTF-8) | data_len (LE u32) | data ... | crc32 (LE u32) | (pad with 0xFF) |
 // ```
 // * Each file entry is page-aligned for simpler handling.
 // * A 0xFF byte at the start indicates an unused entry.
+// * CRC32 is computed over `data_len` (4 bytes, LE) and `data`.
 
 pub mod ex_flash;
 #[allow(unused_imports)]
@@ -57,6 +58,7 @@ impl From<ExFlashError> for FsError {
         FsError::FlashError(err)
     }
 }
+
 // FlashRegion: Logical to physical address mapping for different data sections.
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -66,8 +68,6 @@ pub enum FlashRegion {
     UserData = 0x340000,
 }
 
-// const CERT_DIR_ADDR: u32 = FlashRegion::Certstore as u32;
-// const CERT_DIR_SIZE: usize = 0x1000;
 const MAX_FILES: usize = 16;
 const MAX_NAME: usize = 32;
 
@@ -91,6 +91,7 @@ pub struct RegionInfo {
     pub start: u32,
     pub size: u32,
 }
+
 // FlashRegion: Logical to physical address mapping for different data sections.
 impl FlashRegion {
     pub const fn info(&self) -> RegionInfo {
@@ -110,6 +111,7 @@ impl FlashRegion {
         }
     }
 }
+
 #[allow(dead_code)]
 impl<'a> FlashController<'a> {
     // - `new`: Create a new flash controller with initial offset set to 0.
@@ -119,6 +121,7 @@ impl<'a> FlashController<'a> {
             last_offset: 0, // Initialize to start of flash region
         }
     }
+
     // - `erase_region`: Erase an entire region (Firmware, Certstore, or UserData).
     pub async fn erase_region(&mut self, region: FlashRegion) -> Result<(), FsError> {
         let info = region.info();
@@ -198,21 +201,17 @@ impl<'a> FlashController<'a> {
     }
 
     // - `find_free_offset`: Scan for the next available (unused) entry offset within a region.
-    // 1.  Start at self.last_offset (where the previous write ended).
-    // 2.  Loop while cur < region.size:
-    //     a.  addr = region.start + cur
-    //     b.  Read one byte → name_len
-    //         • 0xFF  →  this page is untouched ⇒ free space found
-    //                    ↳ return cur aligned up to page boundary.
-    //     c.  Sanity-check: if name_len > MAX_NAME ⇒ corrupted entry ⇒ abort.
-    //     d.  Read 4-byte data_len located at
-    //            size_addr = addr + 1 + name_len
-    //     e.  Compute total entry length:
-    //            entry_size = 1 + name_len + 4 + data_len + 4   // +4 CRC32
-    //     f.  Advance cur by entry_size, then round it up to the next page
-    //            cur = align_up(cur, page_size)
-    // 3.  If the loop ends with no 0xFF byte encountered, the region is full
-    //     ⇒ return None.
+    // 1. Start at self.last_offset (where the previous write ended).
+    // 2. Loop while cur < region.size:
+    //    a. addr = region.start + cur
+    //    b. Read one byte → name_len
+    //       • 0xFF → this page is untouched ⇒ free space found
+    //                 ↳ return cur aligned up to page boundary.
+    //    c. Sanity-check: if name_len > MAX_NAME ⇒ corrupted entry ⇒ abort.
+    //    d. Read 4-byte data_len located at size_addr = addr + 1 + name_len
+    //    e. Compute total entry length: entry_size = 1 + name_len + 4 + data_len + 4 (CRC32)
+    //    f. Advance cur by entry_size, then round it up to the next page
+    // 3. If the loop ends with no 0xFF byte encountered, the region is full ⇒ return None.
     async fn find_free_offset(&mut self, region: &FlashRegion) -> Option<u32> {
         let info = region.info();
         let page_size = self.flash.page_size() as u32;
@@ -253,7 +252,7 @@ impl<'a> FlashController<'a> {
             let data_len = u32::from_le_bytes(size_buf);
             info!("Found entry at 0x{addr:08X}, data_len {data_len}");
 
-            cur += 1 + name_len + 4 + data_len;
+            cur += 1 + name_len + 4 + data_len + 4; // Updated to include 4-byte CRC32
             cur = (cur + page_size - 1) & !(page_size - 1);
         }
         error!("No free space found in region {region:?}");
@@ -262,25 +261,20 @@ impl<'a> FlashController<'a> {
 
     // - `write_file`: Write a file into the flash region.
     // 1. Validate filename length and input data length
-    // 2. Compute total file size: filename + 4-byte length + data + 4-byte CRC
-    // 3. Get flash region information and calculate aligned offset (next page-aligned address)
-    // 4. Check if there is enough space in region to write the file
+    // 2. Compute CRC32 over data_len and data
+    // 3. Compute total file size: filename + 4-byte length + data + 4-byte CRC
+    // 4. Get flash region information and calculate aligned offset
     // 5. Prepare in-memory file buffer with:
     //    - [filename length (1 byte)]
     //    - [filename bytes]
     //    - [data length (4 bytes, little-endian)]
     //    - [payload data]
-    //    - [CRC32 of payload (4 bytes)]
-    // 6. Scan current flash region up to this offset to preserve existing valid entries
-    //    - Read filename length, filename, size, and data for each valid entry
-    //    - Align entries to page boundaries and store them into `preserved_data` buffer
-    // 7. Check if any page about to be written is not fully erased (contains non-0xFF)
-    //    - If so, erase the entire affected sector
-    //    - Rewrite preserved data (with per-page verify after write)
-    // 8. Pad the file buffer to align with full page size if needed
+    //    - [CRC32 of data_len + data (4 bytes)]
+    // 6. Scan current flash region to preserve existing valid entries
+    // 7. Check if any page about to be written is not fully erased
+    // 8. Pad the file buffer to align with full page size
     // 9. Write the padded buffer to flash, page-by-page
-    //    - After each write, verify content is correctly written
-    // 10. Update `last_offset` tracker to point after this file (aligned to page boundary)
+    // 10. Update `last_offset` tracker
     pub async fn write_file(
         &mut self,
         region: FlashRegion,
@@ -298,7 +292,15 @@ impl<'a> FlashController<'a> {
         }
 
         let info = region.info();
-        let crc = crc32fast::hash(data);
+        // Compute CRC32 over data_len and data
+        let data_len = data.len() as u32;
+        let mut crc_input = Vec::<u8, 4096>::new();
+        crc_input
+            .extend_from_slice(&data_len.to_le_bytes())
+            .unwrap();
+        crc_input.extend_from_slice(data).unwrap();
+        let crc = crc32fast::hash(&crc_input); // Updated to include data_len
+
         let file_size = 1 + filename.len() + 4 + data.len() + 4;
         if file_size > 4096 {
             error!("File '{filename}' too large for buffer: {file_size} bytes");
@@ -313,7 +315,7 @@ impl<'a> FlashController<'a> {
             .find_free_offset(&region)
             .await
             .ok_or(FsError::InvalidAddress)?;
-        let abs_address = (info.start + offset + page_size - 1) & !(page_size - 1); // Align to next page boundary
+        let abs_address = (info.start + offset + page_size - 1) & !(page_size - 1);
 
         if abs_address + file_size as u32 > info.start + info.size {
             error!(
@@ -327,10 +329,9 @@ impl<'a> FlashController<'a> {
         let mut buf = Vec::<u8, 4096>::new();
         buf.push(filename.len() as u8).unwrap();
         buf.extend_from_slice(filename.as_bytes()).unwrap();
-        buf.extend_from_slice(&(data.len() as u32).to_le_bytes())
-            .unwrap();
+        buf.extend_from_slice(&data_len.to_le_bytes()).unwrap();
         buf.extend_from_slice(data).unwrap();
-        buf.extend_from_slice(&crc.to_le_bytes()).unwrap(); // <-- THÊM DÒNG NÀY
+        buf.extend_from_slice(&crc.to_le_bytes()).unwrap();
 
         info!(
             "Prepared file buffer, first 16 bytes: {:?}",
@@ -384,11 +385,10 @@ impl<'a> FlashController<'a> {
             let data_len = u32::from_le_bytes(size_buf);
             info!("Data length: {data_len} bytes");
 
-            let entry_size = 1 + name_len + 4 + data_len + 4;
+            let entry_size = 1 + name_len + 4 + data_len + 4; // Include CRC32
             let entry_end = addr + entry_size;
             let aligned_end = (entry_end + page_size - 1) & !(page_size - 1);
 
-            // Read the entire entry (aligned to page boundaries)
             let mut entry_data = Vec::<u8, 4096>::new();
             entry_data
                 .extend_from_slice(&[0xFFu8; 4096][..(aligned_end - addr) as usize])
@@ -465,7 +465,6 @@ impl<'a> FlashController<'a> {
                                 FsError::FlashError(e)
                             })?;
 
-                        // Verify preserved data
                         let mut verify_buf = [0xFFu8; 256];
                         if let Err(e) = self
                             .flash
@@ -523,7 +522,6 @@ impl<'a> FlashController<'a> {
                     FsError::FlashError(e)
                 })?;
 
-            // Verify the write
             let mut verify_buf = [0xFFu8; 256];
             if let Err(e) = self
                 .flash
@@ -558,14 +556,11 @@ impl<'a> FlashController<'a> {
         Ok(())
     }
 
-    // - `write_firmware`: Directly write firmware at fixed offset in Firmware region.
-    //     - Writes metadata followed by the firmware payload.
-    // 1. Validate firmware size against flash capacity and region boundary
-    // 2. Prepare metadata: [filename length (1 byte)] + [filename] + [firmware length (4 bytes)]
-    // 3. Erase the flash region that will store metadata and firmware content
-    // 4. Write metadata to flash
-    // 5. Write firmware content to flash in chunks aligned to flash page size
-    // 6. Optionally verify write (if needed)
+    // - `write_firmware`: Write firmware at fixed offset with CRC32.
+    // 1. Validate firmware size
+    // 2. Prepare metadata: [filename length (1 byte)] + [filename] + [firmware length (4 bytes)] + [CRC32 (4 bytes)]
+    // 3. Erase the flash region
+    // 4. Write metadata and firmware content
     pub async fn write_firmware(
         &mut self,
         region: FlashRegion,
@@ -577,23 +572,33 @@ impl<'a> FlashController<'a> {
             error!("Firmware data exceeds flash capacity at address 0x{address:08X}");
             return Err(FsError::FileTooLarge);
         }
+
+        // Compute CRC32 over data_len and data
+        let data_len = data.len() as u32;
+        let mut crc_input = Vec::<u8, 4096>::new();
+        crc_input
+            .extend_from_slice(&data_len.to_le_bytes())
+            .unwrap();
+        crc_input.extend_from_slice(data);
+        let crc = crc32fast::hash(&crc_input);
+
         let mut metadata = [0u8; 272];
         let n = 1 + filename.len();
         metadata[0] = filename.len() as u8;
         metadata[1..1 + filename.len()].copy_from_slice(filename.as_bytes());
-        metadata[n..n + 4].copy_from_slice(&(data.len() as u32).to_le_bytes());
+        metadata[n..n + 4].copy_from_slice(&data_len.to_le_bytes());
+        metadata[n + 4..n + 8].copy_from_slice(&crc.to_le_bytes()); // Added CRC32
 
         self.erase_range(address, address + metadata.len() as u32)
             .await?;
-        self.flash.write_data(address, &metadata[..n + 4]).await?;
+        self.flash.write_data(address, &metadata[..n + 8]).await?; // Updated to include CRC32
 
-        let header_len = (n + 4) as u32;
+        let header_len = (n + 8) as u32; // Updated to account for CRC32
         let mut addr = address + header_len;
         let mut offset = 0;
         let page = self.flash.page_size() as u32; // 256
 
         while offset < data.len() {
-            // Số byte còn trống trong trang hiện tại
             let page_off = (addr & (page - 1)) as usize;
             let space_in_page = (page as usize) - page_off;
             let chunk = core::cmp::min(space_in_page, data.len() - offset);
@@ -607,12 +612,19 @@ impl<'a> FlashController<'a> {
             offset += chunk;
         }
 
+        info!(
+            "✓ Firmware '{}' written with {} bytes to 0x{:08X}",
+            filename,
+            data.len(),
+            address
+        );
         Ok(())
     }
 
-    // - `read_file`: Read a file’s content by filename.
-    //     - Searches through entries until match.
-    //     - Validates and loads the file into buffer.
+    // - `read_file`: Read a file’s content by filename with CRC32 verification.
+    // 1. Search for the file
+    // 2. Read data and CRC32
+    // 3. Verify CRC32 before returning data
     pub async fn read_file(
         &mut self,
         region: FlashRegion,
@@ -680,11 +692,34 @@ impl<'a> FlashController<'a> {
                     error!("Failed to read data at 0x{data_addr:08X}: {e:?}");
                     return Err(FsError::FlashError(e));
                 }
-                info!("✓ Read file '{filename}' ({data_len} B) from 0x{addr:08X}");
+                // Read and verify CRC32
+                let crc_addr = data_addr + data_len;
+                let mut crc_buf = [0u8; 4];
+                if let Err(e) = self.flash.read_data(crc_addr, &mut crc_buf) {
+                    error!("Failed to read CRC at 0x{crc_addr:08X}: {e:?}");
+                    return Err(FsError::FlashError(e));
+                }
+                let stored_crc = u32::from_le_bytes(crc_buf);
+                let mut crc_input = Vec::<u8, 4096>::new();
+                crc_input
+                    .extend_from_slice(&data_len.to_le_bytes())
+                    .unwrap();
+                crc_input
+                    .extend_from_slice(&buffer[..data_len as usize])
+                    .unwrap();
+                let computed_crc = crc32fast::hash(&crc_input);
+                if stored_crc != computed_crc {
+                    error!(
+                        "CRC mismatch for file '{}': expected 0x{:08X}, got 0x{:08X}",
+                        filename, stored_crc, computed_crc
+                    );
+                    return Err(FsError::VerificationFailed);
+                }
+                info!("✓ Read file '{filename}' ({data_len} B) from 0x{addr:08X}, CRC verified");
                 return Ok(data_len as usize);
             }
 
-            cur += 1 + name_len as u32 + 4 + data_len;
+            cur += 1 + name_len as u32 + 4 + data_len + 4; // Updated to include CRC32
             cur = (cur + page_size - 1) & !(page_size - 1);
         }
 
@@ -692,8 +727,10 @@ impl<'a> FlashController<'a> {
         Err(FsError::FileNotFound)
     }
 
-    // - `verify_file`: Compares stored file data with expected buffer.
-    //     - Useful for post-write integrity checks.
+    // - `verify_file`: Verify a file using CRC32.
+    // 1. Read file data and stored CRC32
+    // 2. Compute CRC32 over data_len and data
+    // 3. Compare with expected CRC32
     pub async fn verify_file(
         &mut self,
         base: FlashRegion,
@@ -712,11 +749,32 @@ impl<'a> FlashController<'a> {
                     );
                     return false;
                 }
-                if &buf[..n] == expected_data {
-                    info!("✓ File '{filename}' verification passed");
+                // Compute expected CRC32
+                let data_len = expected_data.len() as u32;
+                let mut crc_input = Vec::<u8, 4096>::new();
+                crc_input
+                    .extend_from_slice(&data_len.to_le_bytes())
+                    .unwrap();
+                crc_input.extend_from_slice(expected_data).unwrap();
+                let expected_crc = crc32fast::hash(&crc_input);
+                // Recompute CRC32 for read data
+                let mut crc_input = Vec::<u8, 4096>::new();
+                crc_input
+                    .extend_from_slice(&data_len.to_le_bytes())
+                    .unwrap();
+                crc_input.extend_from_slice(&buf[..n]).unwrap();
+                let computed_crc = crc32fast::hash(&crc_input);
+                if computed_crc == expected_crc {
+                    info!(
+                        "✓ File '{filename}' verification passed (CRC32: 0x{:08X})",
+                        computed_crc
+                    );
                     true
                 } else {
-                    error!("✗ File '{filename}' verification failed - data mismatch");
+                    error!(
+                        "✗ File '{filename}' verification failed - CRC mismatch: expected 0x{:08X}, got 0x{:08X}",
+                        expected_crc, computed_crc
+                    );
                     false
                 }
             }
@@ -727,8 +785,7 @@ impl<'a> FlashController<'a> {
         }
     }
 
-    // - `list_files`: Enumerates all valid file entries within a region.
-    //     - Returns a list of `DirEntry` structs.
+    // - `list_files`: Enumerate all valid file entries within a region.
     pub async fn list_files(
         &mut self,
         region: FlashRegion,
@@ -782,7 +839,7 @@ impl<'a> FlashController<'a> {
             };
             files.push(entry).map_err(|_| FsError::FileTooLarge)?;
 
-            cur += 1 + name_len as u32 + 4 + data_len;
+            cur += 1 + name_len as u32 + 4 + data_len + 4; // Updated to include CRC32
             cur = (cur + page_size - 1) & !(page_size - 1);
         }
 
