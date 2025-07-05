@@ -23,26 +23,7 @@ use heapless::String;
 use log::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, PartialEq)] // Thêm PartialEq để so sánh trạng thái
-pub enum State {
-    ResetHardware,
-    DisableEchoMode,
-    GetModelId,
-    GetSoftwareVersion,
-    GetSimCardStatus,
-    GetNetworkSignalQuality,
-    GetNetworkInfo,
-    EnableGps,
-    EnableAssistGps,
-    SetModemFunctionality,
-    UploadMqttCert,
-    CheckNetworkRegistration,
-    MqttOpenConnection,
-    MqttConnectBroker,
-    GetGPSData,
-    ErrorConnection,
-}
-
+// Network registration status constants
 const REGISTERED_HOME: u8 = 1;
 const REGISTERED_ROAMING: u8 = 5;
 const UNREGISTERED_SEARCHING: u8 = 2;
@@ -81,6 +62,25 @@ pub struct TripData {
     pub timestamp: u64,
 }
 
+#[derive(Debug)]
+pub enum State {
+    ResetHardware,
+    DisableEchoMode,
+    GetModelId,
+    GetSoftwareVersion,
+    GetSimCardStatus,
+    GetNetworkSignalQuality,
+    GetNetworkInfo,
+    EnableGps,
+    EnableAssistGps,
+    SetModemFunctionality,
+    UploadMqttCert,
+    CheckNetworkRegistration,
+    MqttOpenConnection,
+    MqttConnectBroker,
+    GetGPSData,
+}
+
 pub struct Modem {
     pub client: Client<'static, UartTx<'static, Async>, 1024>,
     pen: Output<'static>,
@@ -108,130 +108,170 @@ impl Modem {
         }
     }
 
-    pub async fn run_state_machine(
-        &mut self,
-        initial_state: State,
-        transitions: &[(
-            State,
-            Box<dyn Fn(&mut Self) -> Result<(), ModemError> + 'static>,
-        )],
-    ) -> Result<(), ModemError> {
-        let mut state = initial_state;
-        let mut retry_count = 0;
-        const MAX_RETRIES: usize = 3;
+    pub async fn modem_initialize(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Starting LTE initialization");
+        let mut state = State::ResetHardware;
 
         loop {
             match state {
-                _ => {
-                    for &(next_state, ref handler) in transitions {
-                        match handler(self).await {
-                            Ok(()) => {
-                                state = next_state;
-                                retry_count = 0; // Reset retry count on success
-                                break;
-                            }
-                            Err(e) => {
-                                retry_count += 1;
-                                if retry_count > MAX_RETRIES {
-                                    error!("[modem] Max retries exceeded for state: {:?}", state);
-                                    return Err(e);
-                                }
-                                warn!("[modem] Retry {} for state: {:?}", retry_count, state);
-                                Timer::after(Duration::from_secs(1 << retry_count)).await;
-                                // Exponential backoff
-                            }
-                        }
-                    }
-                    if state == State::ErrorConnection {
+                State::ResetHardware => {
+                    if self.reset_hardware().await.is_ok() {
+                        info!("[modem] Modem hardware reset successfully");
+                        state = State::DisableEchoMode;
+                    } else {
+                        error!("[modem] Modem init failed at ResetHardware");
                         return Err(ModemError::CommandFailed);
                     }
+                }
+                State::DisableEchoMode => {
+                    if self.disable_echo_mode().await.is_ok() {
+                        info!("[modem] Echo mode disabled successfully");
+                        state = State::GetModelId;
+                    } else {
+                        error!("[modem] Modem init failed at DisableEchoMode");
+                        return Err(ModemError::CommandFailed);
+                    }
+                }
+                State::GetModelId => {
+                    if self.get_model_id().await.is_ok() {
+                        info!("[modem] Model ID retrieved successfully");
+                        state = State::GetSoftwareVersion;
+                    } else {
+                        error!("[modem] Modem init failed at GetModelId");
+                        return Err(ModemError::CommandFailed);
+                    }
+                }
+                State::GetSoftwareVersion => {
+                    if self.get_software_version().await.is_ok() {
+                        info!("[modem] Software version retrieved successfully");
+                        break;
+                    } else {
+                        error!("[modem] Modem init failed at GetSoftwareVersion");
+                        return Err(ModemError::CommandFailed);
+                    }
+                }
+                _ => {
+                    error!("[modem] Invalid state in modem_initialize: {:?}", state);
+                    return Err(ModemError::CommandFailed);
                 }
             }
             Timer::after(Duration::from_secs(1)).await;
         }
-    }
-
-    pub async fn modem_initialize(&mut self) -> Result<(), ModemError> {
-        info!("[modem] Starting modem initialization");
-        let transitions = vec![
-            (
-                State::DisableEchoMode,
-                Box::new(|m: &mut Self| m.reset_hardware())
-                    as Box<dyn Fn(&mut Self) -> Result<(), ModemError> + 'static>,
-            ),
-            (State::GetModelId, Box::new(|m| m.disable_echo_mode())),
-            (State::GetSoftwareVersion, Box::new(|m| m.get_model_id())),
-            (
-                State::ErrorConnection,
-                Box::new(|m| m.get_software_version()),
-            ),
-        ];
-        self.run_state_machine(State::ResetHardware, &transitions)
-            .await?;
         Ok(())
     }
 
     pub async fn lte_initialize(
         &mut self,
-        _mqtt_client_id: &str,
-        _ca_chain: &'static [u8],
-        _certificate: &'static [u8],
-        _private_key: &'static [u8],
+        mqtt_client_id: &str,
+        ca_chain: &'static [u8],
+        certificate: &'static [u8],
+        private_key: &'static [u8],
     ) -> Result<(), ModemError> {
         info!("[modem] Starting LTE initialization");
-        let transitions = vec![
-            (
-                State::GetNetworkSignalQuality,
-                Box::new(|m| m.get_sim_card_status()),
-            ),
-            (
-                State::GetNetworkInfo,
-                Box::new(|m| m.get_network_signal_quality()),
-            ),
-            (
-                State::SetModemFunctionality,
-                Box::new(|m| m.get_network_info()),
-            ),
-            (
-                State::UploadMqttCert,
-                Box::new(|m| m.set_modem_functionality()),
-            ),
-            (
-                State::CheckNetworkRegistration,
-                Box::new(|m| {
-                    m.upload_mqtt_cert(
-                        include_str!("../../certx/crt.pem").as_bytes(),
-                        include_str!("../../certx/dvt.crt").as_bytes(),
-                        include_str!("../../certx/dvt.key").as_bytes(),
-                    )
-                }),
-            ),
-        ];
-        self.run_state_machine(State::GetSimCardStatus, &transitions)
-            .await?;
+        let mut state = State::GetSimCardStatus;
+
+        loop {
+            match state {
+                State::GetSimCardStatus => {
+                    if self.get_sim_card_status().await.is_ok() {
+                        info!("[modem] SIM card status retrieved successfully");
+                        state = State::GetNetworkSignalQuality;
+                    } else {
+                        error!("[modem] LTE init failed at GetSimCardStatus");
+                        return Err(ModemError::CommandFailed);
+                    }
+                }
+                State::GetNetworkSignalQuality => {
+                    if self.get_network_signal_quality().await.is_ok() {
+                        info!("[modem] Network signal quality retrieved successfully");
+                        state = State::GetNetworkInfo;
+                    } else {
+                        error!("[modem] LTE init failed at GetNetworkSignalQuality");
+                        return Err(ModemError::CommandFailed);
+                    }
+                }
+                State::GetNetworkInfo => {
+                    if self.get_network_info().await.is_ok() {
+                        info!("[modem] Network info retrieved successfully");
+                        state = State::SetModemFunctionality;
+                    } else {
+                        error!("[modem] LTE init failed at GetNetworkInfo");
+                        return Err(ModemError::CommandFailed);
+                    }
+                }
+                State::SetModemFunctionality => {
+                    if self.set_modem_functionality().await.is_ok() {
+                        info!("[modem] Modem functionality set successfully");
+                        state = State::UploadMqttCert;
+                    } else {
+                        error!("[modem] LTE init failed at SetModemFunctionality");
+                        return Err(ModemError::CommandFailed);
+                    }
+                }
+                State::UploadMqttCert => {
+                    if self
+                        .upload_mqtt_cert(ca_chain, certificate, private_key)
+                        .await
+                        .is_ok()
+                    {
+                        info!("[modem] MQTT certificates uploaded successfully");
+                        state = State::CheckNetworkRegistration;
+                    } else {
+                        error!("[modem] LTE init failed at UploadMqttCert");
+                        return Err(ModemError::CommandFailed);
+                    }
+                }
+                State::CheckNetworkRegistration => {
+                    if self.check_network_registration().await.is_ok() {
+                        info!("[modem] Network registration checked successfully");
+                        break;
+                    } else {
+                        error!("[modem] LTE init failed at CheckNetworkRegistration");
+                        return Err(ModemError::CommandFailed);
+                    }
+                }
+                _ => {
+                    error!("[modem] Invalid state in lte_initialize: {:?}", state);
+                    return Err(ModemError::CommandFailed);
+                }
+            }
+            Timer::after(Duration::from_secs(1)).await;
+        }
         Ok(())
     }
 
     pub async fn lte_handle_mqtt(&mut self) -> Result<(), ModemError> {
         info!("[modem] Starting LTE MQTT initialization");
-        let transitions = vec![(
-            State::MqttConnectBroker,
-            Box::new(|m| m.mqtt_open_connection()),
-        )];
-        self.run_state_machine(State::MqttOpenConnection, &transitions)
-            .await?;
-        Ok(())
+        if self.mqtt_open_connection().await.is_ok() {
+            info!("[modem] MQTT connection opened successfully");
+            if self.mqtt_connect_broker().await.is_ok() {
+                info!("[modem] MQTT connected to broker successfully");
+                Ok(())
+            } else {
+                error!("[modem] Failed to connect to MQTT broker");
+                Err(ModemError::MqttConnectionFailed)
+            }
+        } else {
+            error!("[modem] Failed to open MQTT connection");
+            Err(ModemError::MqttConnectionFailed)
+        }
     }
 
     pub async fn gps_initialize(&mut self) -> Result<(), ModemError> {
         info!("[modem] Starting GPS initialization");
-        let transitions = vec![
-            (State::EnableAssistGps, Box::new(|m| m.enable_gps())),
-            (State::GetGPSData, Box::new(|m| m.enable_assist_gps())),
-        ];
-        self.run_state_machine(State::EnableGps, &transitions)
-            .await?;
-        Ok(())
+        if self.enable_gps().await.is_ok() {
+            info!("[modem] GPS enabled successfully");
+            if self.enable_assist_gps().await.is_ok() {
+                info!("[modem] Assisted GPS enabled successfully");
+                Ok(())
+            } else {
+                error!("[modem] Failed to enable assisted GPS");
+                Err(ModemError::CommandFailed)
+            }
+        } else {
+            error!("[modem] Failed to enable GPS");
+            Err(ModemError::CommandFailed)
+        }
     }
 
     pub async fn gps_state_machine(
@@ -759,16 +799,6 @@ impl Modem {
                 error!("[modem] Failed to retrieve GPS data: {e:?}");
             }
         }
-    }
-
-    pub async fn error_connection(&mut self) -> Result<(), ModemError> {
-        if self.is_connected {
-            let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
-            self.is_connected = false;
-        }
-        error!("[modem] System in error state - attempting recovery");
-        Timer::after(Duration::from_secs(5)).await;
-        self.reset_hardware().await
     }
 }
 
