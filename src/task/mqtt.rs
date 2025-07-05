@@ -11,7 +11,7 @@ use log::{error, info, warn};
 // use crate::task::lte::TripData;
 use embassy_sync::channel::Channel;
 
-use crate::task::modem::*;
+use crate::modem::*;
 
 use crate::cfg::net_cfg::*;
 use crate::net::{dns::DnsBuilder, mqtt::MqttClient};

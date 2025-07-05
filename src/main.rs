@@ -3,6 +3,7 @@
 
 mod cfg;
 mod hal;
+mod modem;
 mod net;
 mod task;
 mod util;
@@ -33,9 +34,10 @@ use esp_hal::{
 };
 use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
 use log::{error, info};
+use modem::*;
 use static_cell::StaticCell;
 use task::can::*;
-use task::modem::*;
+use task::lte::*;
 use task::mqtt::*;
 use task::netmgr::net_manager_task;
 #[cfg(feature = "ota")]
@@ -43,7 +45,6 @@ use task::ota::ota_handler;
 use task::wifi::*;
 
 pub type GpsOutbox = Channel<NoopRawMutex, TripData, 8>;
-static GPS_CHANNEL: StaticCell<GpsOutbox> = StaticCell::new();
 macro_rules! mk_static {
     ($t:ty, $val:expr) => {{
         static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
@@ -144,25 +145,26 @@ async fn main(spawner: Spawner) -> ! {
         const { twai::filter::SingleExtendedFilter::new(b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", b"x") },
     );
     let can = twai_config.start();
-    static CHANNEL: StaticCell<TwaiOutbox> = StaticCell::new();
-    let channel = &*CHANNEL.init(Channel::new());
+    static CAN_CHANNEL: StaticCell<TwaiOutbox> = StaticCell::new();
+    static GPS_CHANNEL: StaticCell<GpsOutbox> = StaticCell::new();
+    let can_channel = &*CAN_CHANNEL.init(Channel::new());
     let (can_rx, _can_tx) = can.split();
 
     let gps_channel = &*GPS_CHANNEL.init(Channel::new());
 
-    spawner.spawn(can_receiver(can_rx, channel)).unwrap();
-    // spawner.spawn(connection(_controller)).unwrap();
-    // spawner.spawn(net_task(_runner)).unwrap();
-    // spawner
-    //     .spawn(mqtt_handler(
-    //         _stack,
-    //         channel,
-    //         gps_channel,
-    //         peripherals.SHA,
-    //         peripherals.RSA,
-    //     ))
-    //     .unwrap();
-    // spawner.spawn(net_manager_task(spawner)).unwrap();
+    spawner.spawn(can_receiver(can_rx, can_channel)).unwrap();
+    spawner.spawn(connection(_controller)).unwrap();
+    spawner.spawn(net_task(_runner)).unwrap();
+    spawner
+        .spawn(mqtt_handler(
+            _stack,
+            can_channel,
+            gps_channel,
+            peripherals.SHA,
+            peripherals.RSA,
+        ))
+        .unwrap();
+    spawner.spawn(net_manager_task(spawner)).unwrap();
 
     // ====================================
     // === Spawn RX handler Quectel ===
@@ -172,7 +174,13 @@ async fn main(spawner: Spawner) -> ! {
     // ====================================
     // === Quectel flow API driver ===
     // ====================================
-    let mut quectel = Modem::new(client, quectel_pen_pin, quectel_dtr_pin, &URC_CHANNEL);
+    let mut quectel = Modem::new(
+        client,
+        quectel_pen_pin,
+        quectel_dtr_pin,
+        &URC_CHANNEL,
+        ModemModel::QuectelEG800k,
+    );
 
     match quectel.modem_initialize().await {
         Ok(()) => {
