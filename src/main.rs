@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+// Declare modules at the crate root
 mod cfg;
 mod hal;
 mod modem;
@@ -8,22 +9,29 @@ mod net;
 mod task;
 mod util;
 
+// Import the necessary modules
 //use crate::hal::flash;
-use crate::cfg::net_cfg::MQTT_CLIENT_ID;
+use crate::cfg::net_cfg::*;
 use crate::net::atcmd::Urc;
+use task::can::*;
+use task::lte::*;
+use task::mqtt::*;
+#[cfg(feature = "ota")]
+use task::ota::ota_handler;
+use task::wifi::*;
+
+// Import the necessary modules
 use atat::{ResponseSlot, UrcChannel};
-use core::{fmt::Debug, fmt::Write, str::FromStr};
 use embassy_executor::Spawner;
 use embassy_net::{Stack, StackResources};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
-use embassy_time::{Duration, Timer};
-use esp_backtrace as _;
 #[cfg(feature = "ota")]
+use embassy_time::Duration;
+use embassy_time::Timer;
 use esp_backtrace as _;
 #[cfg(feature = "wdg")]
 use esp_hal::rtc_cntl::{Rtc, RwdtStage};
-
 use esp_hal::{
     clock::CpuClock,
     gpio::Output,
@@ -33,20 +41,14 @@ use esp_hal::{
     uart::{Config, Uart},
 };
 use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
-use log::{error, info};
+use log::info;
 use modem::*;
 use static_cell::StaticCell;
-use task::can::*;
-use task::lte::*;
-use task::mqtt::*;
 use task::netmgr::net_manager_task;
-#[cfg(feature = "ota")]
-use task::ota::ota_handler;
-use task::wifi::*;
-
 pub type GpsOutbox = Channel<NoopRawMutex, TripData, 8>;
+
 macro_rules! mk_static {
-    ($t:ty, $val:expr) => {{
+    ($t:ty,$val:expr) => {{
         static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
         #[deny(unused_attributes)]
         let x = STATIC_CELL.uninit().write(($val));
@@ -86,21 +88,21 @@ async fn main(spawner: Spawner) -> ! {
 
     let seed = 1234;
 
-    let (_stack, _runner) = embassy_net::new(
+    let (stack, _runner) = embassy_net::new(
         _wifi_interface,
         config,
         mk_static!(StackResources<3>, StackResources::<3>::new()),
         seed,
     );
-    let _stack = &*mk_static!(Stack, _stack);
+    let stack = &*mk_static!(Stack, stack);
 
     // ==============================
     // === LTE UART + Quectel ===
     // ==============================
     let uart_tx_pin = peripherals.GPIO23;
     let uart_rx_pin = peripherals.GPIO15;
-    let quectel_pen_pin = Output::new(peripherals.GPIO21, esp_hal::gpio::Level::High);
-    let quectel_dtr_pin = Output::new(peripherals.GPIO22, esp_hal::gpio::Level::High);
+    let pen_pin = Output::new(peripherals.GPIO21, esp_hal::gpio::Level::High);
+    let dtr_pin = Output::new(peripherals.GPIO22, esp_hal::gpio::Level::High);
 
     let config = Config::default().with_rx_fifo_full_threshold(64);
     let uart0 = Uart::new(peripherals.UART0, config)
@@ -156,8 +158,8 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(connection(_controller)).unwrap();
     spawner.spawn(net_task(_runner)).unwrap();
     spawner
-        .spawn(mqtt_handler(
-            _stack,
+        .spawn(wifi_mqtt_handler(
+            stack,
             can_channel,
             gps_channel,
             peripherals.SHA,
@@ -169,81 +171,57 @@ async fn main(spawner: Spawner) -> ! {
     // ====================================
     // === Spawn RX handler Quectel ===
     // ====================================
-    spawner.spawn(modem_rx_handler(ingress, uart_rx)).ok();
+    let _ = spawner.spawn(modem_rx_handler(ingress, uart_rx));
 
     // ====================================
     // === Quectel flow API driver ===
     // ====================================
-    let mut quectel = Modem::new(
-        client,
-        quectel_pen_pin,
-        quectel_dtr_pin,
-        &URC_CHANNEL,
-        ModemModel::QuectelEG800k,
-    );
-
-    match quectel.modem_initialize().await {
-        Ok(()) => {
-            info!("[main] Modem initialized successfully");
-        }
-        Err(e) => {
-            error!("[main] Modem init failed: {:?}", e);
-            Timer::after(Duration::from_secs(5)).await;
-        }
-    }
 
     let ca_chain = include_str!("../certx/crt.pem").as_bytes();
     let certificate = include_str!("../certx/dvt.crt").as_bytes();
     let private_key = include_str!("../certx/dvt.key").as_bytes();
 
-    // Initialize LTE
-    match quectel
-        .lte_initialize(MQTT_CLIENT_ID, ca_chain, certificate, private_key)
+    let mut quectel = Modem::new(
+        client,
+        pen_pin,
+        dtr_pin,
+        &URC_CHANNEL,
+        ModemModel::QuectelEG800k,
+    );
+
+    // Handle modem_init Future
+    if let Err(e) = quectel.modem_init().await {
+        info!("Failed to initialize modem: {e:?}");
+    }
+
+    // Handle lte_init Result
+    if let Err(e) = quectel
+        .lte_init(MQTT_CLIENT_ID, ca_chain, certificate, private_key)
         .await
     {
-        Ok(()) => {
-            info!("[main] LTE initialized successfully");
-        }
-        Err(e) => {
-            error!("[main] LTE init failed: {:?}", e);
-            Timer::after(Duration::from_secs(5)).await;
-        }
+        info!("Failed to initialize LTE: {e:?}");
     }
-    match quectel.gps_initialize().await {
-        Ok(()) => {
-            info!("[main] GPS initialized successfully");
-        }
-        Err(e) => {
-            error!("[main] GPS init failed: {:?}", e);
-            Timer::after(Duration::from_secs(5)).await;
-        }
-    }
-    // Spawn GPS state machine task with reference
-    // spawner
-    //     .spawn(gps_task(&mut quectel, MQTT_CLIENT_ID, gps_channel))
-    //     .unwrap();
 
-    // Use LTE MQTT handling (after ensuring quectel is not moved)
-    match quectel.lte_handle_mqtt().await {
-        Ok(()) => {
-            info!("[main] LTE MQTT initialized successfully");
-        }
-        Err(e) => {
-            error!("[main] LTE MQTT init failed: {:?}", e);
-            Timer::after(Duration::from_secs(5)).await;
-        }
-    }
+    // Handle spawner.spawn Result
+    let _ = spawner.spawn(lte_mqtt_handler(
+        MQTT_CLIENT_ID,
+        quectel,
+        can_channel,
+        gps_channel,
+    ));
 
     #[cfg(feature = "ota")]
-    // Wait until Wi-Fi connected
+    //wait until wifi connected
     {
         loop {
-            if _stack.is_link_up() {
+            if stack.is_link_up() {
                 break;
             }
             Timer::after(Duration::from_millis(500)).await;
         }
-        spawner.spawn(ota_handler(spawner, trng, _stack)).unwrap();
+        spawner
+            .spawn(ota_handler(spawner, trng, stack))
+            .expect("Failed to spawn OTA handler task");
     }
 
     // WDG feed task

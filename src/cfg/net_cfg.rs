@@ -1,7 +1,7 @@
 use core::ffi::CStr;
 // WIFI configuration constants
-pub const WIFI_SSID: &str = "BV Public";
-pub const WIFI_PSWD: &str = "banviencoaaarp";
+pub const WIFI_SSID: &str = "Oke heh";
+pub const WIFI_PSWD: &str = "huuvinh2002";
 // MQTT configuration constants
 pub const MQTT_CSTR_SERVER_NAME: &CStr = c"broker.bluleap.ai";
 pub const MQTT_SERVER_NAME: &str = "broker.bluleap.ai";

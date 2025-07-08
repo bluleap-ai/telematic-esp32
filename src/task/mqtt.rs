@@ -26,7 +26,7 @@ static IS_WIFI: AtomicBool = AtomicBool::new(false);
 
 #[allow(clippy::uninlined_format_args)]
 #[embassy_executor::task]
-pub async fn mqtt_handler(
+pub async fn wifi_mqtt_handler(
     stack: &'static Stack<'static>,
     can_channel: &'static TwaiOutbox,
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
