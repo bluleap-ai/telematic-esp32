@@ -12,7 +12,7 @@ mod util;
 //use crate::hal::flash;
 use crate::net::atcmd::Urc;
 use mem::ex_flash::{ExFlashError, W25Q128FVSG};
-use mem::filesystem::{FlashController, FlashRegion};
+use mem::filesystem::{FileEntry, FlashController, FlashRegion};
 use task::can::*;
 use task::lte::*;
 use task::mqtt::*;
@@ -59,6 +59,11 @@ macro_rules! mk_static {
         x
     }};
 }
+
+const FIRMWARE: &[u8] = include_bytes!("../firmware.bin");
+const CA_CRT: &[u8] = include_bytes!("../certs/ca.crt");
+const DVT_CRT: &[u8] = include_bytes!("..//certs/dvt.crt");
+const DVT_KEY: &[u8] = include_bytes!("../certs/dvt.key");
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
@@ -176,33 +181,34 @@ async fn main(spawner: Spawner) -> ! {
             panic!("Cannot continue without flash");
         }
     }
+    let files = [
+        FileEntry {
+            region: FlashRegion::Firmware,
+            name: "firmware.bin",
+            data: FIRMWARE,
+            is_fw: true,
+        },
+        FileEntry {
+            region: FlashRegion::Certstore,
+            name: "ca.crt",
+            data: CA_CRT,
+            is_fw: false,
+        },
+        FileEntry {
+            region: FlashRegion::Certstore,
+            name: "dvt.crt",
+            data: DVT_CRT,
+            is_fw: false,
+        },
+        FileEntry {
+            region: FlashRegion::Certstore,
+            name: "dvt.key",
+            data: DVT_KEY,
+            is_fw: false,
+        },
+    ];
     let mut fs = FlashController::new(&mut flash);
-    // info!("== List files in CertStore");
-    // match fs.list_files(FlashRegion::Certstore).await {
-    //     Ok(files) => {
-    //         if files.is_empty() {
-    //             info!("(Certstore trống)");
-    //         } else {
-    //             for e in files.iter() {
-    //                 info!("• {:<32}  {:>6} B  @0x{:06X}", e.name, e.len, e.offset);
-    //             }
-    //         }
-    //     }
-    //     Err(e) => error!("Không duyệt được Certstore: {e:?}"),
-    // }
-    // //Listfile in firmware
-    // match fs.list_files(FlashRegion::Firmware).await {
-    //     Ok(files) => {
-    //         if files.is_empty() {
-    //             info!("(Certstore trống)");
-    //         } else {
-    //             for e in files.iter() {
-    //                 info!("• {:<32}  {:>6} B  @0x{:06X}", e.name, e.len, e.offset);
-    //             }
-    //         }
-    //     }
-    //     Err(e) => error!("Không duyệt được Certstore: {e:?}"),
-    // }
+
     fs.print_directory(FlashRegion::Certstore).await;
     spawner.spawn(can_receiver(can_rx, channel)).ok();
     spawner.spawn(connection(controller)).ok();

@@ -60,7 +60,7 @@ impl From<ExFlashError> for FsError {
 }
 
 // FlashRegion: Logical to physical address mapping for different data sections.
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)] // thêm Copy + Clone
 #[allow(dead_code)]
 pub enum FlashRegion {
     Firmware = 0x000000,
@@ -79,6 +79,13 @@ pub struct DirEntry {
     pub name: heapless::String<MAX_NAME>,
     pub offset: u32,
     pub len: u32,
+}
+
+pub struct FileEntry {
+    pub region: FlashRegion,
+    pub name: &'static str,
+    pub data: &'static [u8],
+    pub is_fw: bool,
 }
 // FlashController: Main interface for managing file system operations on flash.
 
