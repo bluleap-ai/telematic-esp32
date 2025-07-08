@@ -20,13 +20,14 @@ use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 
 // Network registration status constants
-const REGISTERED_HOME: u8 = 1;
-const REGISTERED_ROAMING: u8 = 5;
-const UNREGISTERED_SEARCHING: u8 = 2;
-const REGISTRATION_DENIED: u8 = 3;
-const REGISTRATION_FAILED: u8 = 4;
+const REGISTERED_HOME: u8 = 1; // Registered on home network
+const UNREGISTERED_SEARCHING: u8 = 2; // Not registered, searching for network
+const REGISTRATION_DENIED: u8 = 3; // Registration denied
+const REGISTRATION_FAILED: u8 = 4; // Registration failed
+const REGISTERED_ROAMING: u8 = 5; // Registered while roaming
 
 #[allow(dead_code)] // Suppress warnings for unused variants
+/// Supported modem models.
 #[derive(Debug)]
 pub enum ModemModel {
     QuectelEG800k,
@@ -35,30 +36,33 @@ pub enum ModemModel {
 }
 
 #[allow(dead_code)] // Suppress warnings for unused variants
+/// Possible modem-related errors.
 #[derive(Debug)]
 pub enum ModemError {
-    Command,
-    MqttConnection,
-    MqttPublish,
-    NetworkRegistration,
+    Command,             // AT command failed
+    MqttConnection,      // MQTT connection error
+    MqttPublish,         // MQTT publish error
+    NetworkRegistration, // Network registration error
 }
 
 #[allow(dead_code)] // Suppress warnings for unused enum
+/// Errors when connecting to the MQTT broker.
 #[derive(Debug, PartialEq)]
 pub enum MqttConnectError {
-    Command,
-    StringConversion,
-    Timeout,
-    ModemError(u8),
+    Command,          // AT command error
+    StringConversion, // String conversion failed
+    Timeout,          // Operation timed out
+    ModemError(u8),   // Generic modem error with code
 }
 
+/// Trip-related GPS and device data.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TripData {
-    pub device_id: String<36>,
-    pub trip_id: String<36>,
-    pub latitude: f64,
-    pub longitude: f64,
-    pub timestamp: u64,
+    pub device_id: String<36>, // Device UUID
+    pub trip_id: String<36>,   // Trip UUID
+    pub latitude: f64,         // Latitude
+    pub longitude: f64,        // Longitude
+    pub timestamp: u64,        // Epoch timestamp
 }
 
 #[allow(dead_code)] // Suppress warnings for unused variants
@@ -81,18 +85,28 @@ pub enum State {
     GetGPSData,
 }
 
+/// Represents a cellular modem for LTE and GPS operations.
 pub struct Modem {
-    pub client: Client<'static, UartTx<'static, Async>, 1024>,
-    pen: Output<'static>,
-    #[allow(dead_code)] // Suppress warnings for unused fields
-    dtr: Output<'static>,
-    urc_channel: &'static UrcChannel<Urc, 128, 3>,
-    is_connected: bool,
-    #[allow(dead_code)] // Suppress warnings for unused fields
-    modem_model: ModemModel,
+    pub client: Client<'static, UartTx<'static, Async>, 1024>, // AT command client
+    pen: Output<'static>,                                      // Modem power enable pin
+    dtr: Output<'static>,                                      // Data terminal ready pin (optional)
+    urc_channel: &'static UrcChannel<Urc, 128, 3>, // Channel for unsolicited result codes
+    is_connected: bool,                            // MQTT connection state
+    modem_model: ModemModel,                       // Modem model type
 }
 
 impl Modem {
+    /// Creates a new `Modem` instance.
+    ///
+    /// # Parameters
+    /// - `client`: AT command client for modem communication.
+    /// - `pen`: GPIO pin for modem power control.
+    /// - `dtr`: GPIO pin for data terminal ready signal.
+    /// - `urc_channel`: Channel for handling unsolicited result codes (URCs).
+    /// - `modem_model`: The modem model being used.
+    ///
+    /// # Returns
+    /// A configured `Modem` instance.
     pub fn new(
         client: Client<'static, UartTx<'static, Async>, 1024>,
         pen: Output<'static>,
@@ -110,6 +124,14 @@ impl Modem {
         }
     }
 
+    /// Initializes the modem through basic steps: hardware reset, disabling echo mode, retrieving model ID, and software version.
+    ///
+    /// # Returns
+    /// - `Ok(())` if initialization succeeds.
+    /// - `Err(ModemError::Command)` if any step fails.
+    ///
+    /// # Notes
+    /// Uses a state machine to perform initialization steps sequentially.
     pub async fn modem_init(&mut self) -> Result<(), ModemError> {
         info!("[modem] Starting LTE initialization {:?}", self.modem_model);
         let mut state = State::ResetHardware;
@@ -162,9 +184,21 @@ impl Modem {
         Ok(())
     }
 
+    /// Initializes LTE connection, including checking SIM status, signal quality, network info,
+    /// setting modem functionality, and uploading MQTT certificates.
+    ///
+    /// # Parameters
+    /// - `_mqtt_client_id`: MQTT client ID (currently unused).
+    /// - `ca_chain`: CA certificate chain (static byte array).
+    /// - `certificate`: Client certificate (static byte array).
+    /// - `private_key`: Client private key (static byte array).
+    ///
+    /// # Returns
+    /// - `Ok(())` if initialization succeeds.
+    /// - `Err(ModemError::Command)` if any step fails.
     pub async fn lte_init(
         &mut self,
-        _mqtt_client_id: &str, // Prefixed with underscore to suppress unused variable warning
+        _mqtt_client_id: &str,
         ca_chain: &'static [u8],
         certificate: &'static [u8],
         private_key: &'static [u8],
@@ -217,18 +251,9 @@ impl Modem {
                         .is_ok()
                     {
                         info!("[modem] MQTT certificates uploaded successfully");
-                        state = State::CheckNetworkRegistration;
-                    } else {
-                        error!("[modem] LTE init failed at UploadMqttCert");
-                        return Err(ModemError::Command);
-                    }
-                }
-                State::CheckNetworkRegistration => {
-                    if self.check_network_registration().await.is_ok() {
-                        info!("[modem] Network registration checked successfully");
                         break;
                     } else {
-                        error!("[modem] LTE init failed at CheckNetworkRegistration");
+                        error!("[modem] LTE init failed at UploadMqttCert");
                         return Err(ModemError::Command);
                     }
                 }
@@ -242,24 +267,118 @@ impl Modem {
         Ok(())
     }
 
+    /// Initializes MQTT over LTE by checking network registration, opening an MQTT connection,
+    /// and connecting to the MQTT broker.
+    ///
+    /// # Returns
+    /// - `Ok(())` if initialization succeeds.
+    /// - `Err(ModemError::Command)` or `Err(ModemError::MqttConnection)` if any step fails.
     #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
     pub async fn init_mqtt_over_lte(&mut self) -> Result<(), ModemError> {
         info!("[modem] Starting LTE MQTT initialization");
-        if self.mqtt_open_connection().await.is_ok() {
-            info!("[modem] MQTT connection opened successfully");
-            if self.mqtt_connect_broker().await.is_ok() {
-                info!("[modem] MQTT connected to broker successfully");
-                Ok(())
-            } else {
-                error!("[modem] Failed to connect to MQTT broker");
-                Err(ModemError::MqttConnection)
+        let mut state = State::CheckNetworkRegistration;
+
+        loop {
+            match state {
+                State::CheckNetworkRegistration => {
+                    if self.check_network_registration().await.is_ok() {
+                        info!("[modem] Network registration checked successfully");
+                        state = State::MqttOpenConnection;
+                    } else {
+                        error!("[modem] LTE init failed at CheckNetworkRegistration");
+                        return Err(ModemError::Command);
+                    }
+                }
+                State::MqttOpenConnection => {
+                    if self.mqtt_open_connection().await.is_ok() {
+                        info!("[modem] MQTT connection opened successfully");
+                        state = State::MqttConnectBroker;
+                    } else {
+                        error!("[modem] Failed to open MQTT connection");
+                        return Err(ModemError::MqttConnection);
+                    }
+                }
+                State::MqttConnectBroker => {
+                    if self.mqtt_connect_broker().await.is_ok() {
+                        info!("[modem] MQTT connected to broker successfully");
+                        break;
+                    } else {
+                        error!("[modem] Failed to connect to MQTT broker");
+                        return Err(ModemError::MqttConnection);
+                    }
+                }
+                _ => {
+                    error!("[modem] Invalid state in init_mqtt_over_lte: {state:?}");
+                    return Err(ModemError::Command);
+                }
             }
-        } else {
-            error!("[modem] Failed to open MQTT connection");
-            Err(ModemError::MqttConnection)
+            Timer::after(Duration::from_secs(1)).await;
         }
+        Ok(())
     }
 
+    /// Performs a health check for LTE and MQTT connectivity by verifying network registration,
+    /// opening an MQTT connection, and connecting to the MQTT broker.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the health check succeeds.
+    /// - `Err(ModemError::Command)` or `Err(ModemError::MqttConnection)` if any step fails.
+    ///
+    /// # Notes
+    /// Sends connection events (`LteUnregistered`, `LteDisconnected`, `LteConnected`) to `CONN_EVENT_CHAN`.
+    #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
+    pub async fn health_check_lte(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Starting LTE MQTT initialization");
+        let mut state = State::CheckNetworkRegistration;
+
+        loop {
+            match state {
+                State::CheckNetworkRegistration => {
+                    if self.check_network_registration().await.is_ok() {
+                        info!("[modem] Network registration checked successfully");
+                        state = State::MqttOpenConnection;
+                    } else {
+                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteUnregistered);
+                        error!("[modem] LTE init failed at CheckNetworkRegistration");
+                        return Err(ModemError::Command);
+                    }
+                }
+                State::MqttOpenConnection => {
+                    if self.mqtt_open_connection().await.is_ok() {
+                        info!("[modem] MQTT connection opened successfully");
+                        state = State::MqttConnectBroker;
+                    } else {
+                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
+                        error!("[modem] Failed to open MQTT connection");
+                        return Err(ModemError::MqttConnection);
+                    }
+                }
+                State::MqttConnectBroker => {
+                    if self.mqtt_connect_broker().await.is_ok() {
+                        info!("[modem] MQTT connected to broker successfully");
+                        break;
+                    } else {
+                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
+                        error!("[modem] Failed to connect to MQTT broker");
+                        return Err(ModemError::MqttConnection);
+                    }
+                }
+                _ => {
+                    error!("[modem] Invalid state in init_mqtt_over_lte: {state:?}");
+                    return Err(ModemError::Command);
+                }
+            }
+            Timer::after(Duration::from_secs(1)).await;
+        }
+        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected);
+        Ok(())
+    }
+
+    /// Initializes GPS functionality by enabling GPS and assisted GPS.
+    ///
+    /// # Returns
+    /// - `Ok(())` if initialization succeeds.
+    /// - `Err(ModemError::Command)` if any step fails.
     #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
     pub async fn gps_init(&mut self) -> Result<(), ModemError> {
         info!("[modem] Starting GPS initialization");
@@ -278,28 +397,25 @@ impl Modem {
         }
     }
 
-    #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
-    pub async fn gps_state_machine(
-        &mut self,
-        mqtt_client_id: &str,
-        gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
-    ) -> ! {
-        info!("[modem] Starting GPS state machine");
-        loop {
-            self.get_gps(mqtt_client_id, gps_channel).await;
-            Timer::after(Duration::from_secs(1)).await;
-        }
-    }
-
+    /// Resets the modem hardware by toggling the power pin.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the reset succeeds.
+    /// - `Err(ModemError::Command)` if the reset fails.
     pub async fn reset_hardware(&mut self) -> Result<(), ModemError> {
         info!("[modem] Reset Hardware");
         self.pen.set_low();
-        Timer::after(Duration::from_secs(1)).await;
+        embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
         self.pen.set_high();
-        Timer::after(Duration::from_secs(4)).await;
+        embassy_time::Timer::after(embassy_time::Duration::from_secs(5)).await;
         Ok(())
     }
 
+    /// Disables AT command echo mode on the modem.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the command succeeds.
+    /// - `Err(ModemError::Command)` if the command fails.
     pub async fn disable_echo_mode(&mut self) -> Result<(), ModemError> {
         info!("[modem] Disable Echo Mode");
         if check_result(self.client.send(&DisableEchoMode).await) {
@@ -309,6 +425,11 @@ impl Modem {
         }
     }
 
+    /// Retrieves the modem's model ID.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the command succeeds.
+    /// - `Err(ModemError::Command)` if the command fails.
     pub async fn get_model_id(&mut self) -> Result<(), ModemError> {
         info!("[modem] Get Model Id");
         if check_result(self.client.send(&GetModelId).await) {
@@ -318,6 +439,11 @@ impl Modem {
         }
     }
 
+    /// Retrieves the modem's software version.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the command succeeds.
+    /// - `Err(ModemError::Command)` if the command fails.
     pub async fn get_software_version(&mut self) -> Result<(), ModemError> {
         info!("[modem] Get Software Version");
         if check_result(self.client.send(&GetSoftwareVersion).await) {
@@ -327,6 +453,11 @@ impl Modem {
         }
     }
 
+    /// Checks the SIM card status.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the command succeeds.
+    /// - `Err(ModemError::Command)` if the command fails.
     pub async fn get_sim_card_status(&mut self) -> Result<(), ModemError> {
         info!("[modem] Get Sim Card Status");
         if check_result(self.client.send(&GetSimCardStatus).await) {
@@ -336,6 +467,11 @@ impl Modem {
         }
     }
 
+    /// Retrieves the network signal quality.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the command succeeds.
+    /// - `Err(ModemError::Command)` if the command fails.
     pub async fn get_network_signal_quality(&mut self) -> Result<(), ModemError> {
         info!("[modem] Get Network Signal Quality");
         if check_result(self.client.send(&GetNetworkSignalQuality).await) {
@@ -345,6 +481,11 @@ impl Modem {
         }
     }
 
+    /// Retrieves network information.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the command succeeds.
+    /// - `Err(ModemError::Command)` if the command fails.
     pub async fn get_network_info(&mut self) -> Result<(), ModemError> {
         info!("[modem] Get Network Info");
         if check_result(self.client.send(&GetNetworkInfo).await) {
@@ -354,6 +495,11 @@ impl Modem {
         }
     }
 
+    /// Enables GPS functionality on the modem.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the command succeeds.
+    /// - `Err(ModemError::Command)` if the command fails.
     #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
     pub async fn enable_gps(&mut self) -> Result<(), ModemError> {
         info!("[modem] Enable GPS");
@@ -364,6 +510,11 @@ impl Modem {
         }
     }
 
+    /// Enables assisted GPS functionality on the modem.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the command succeeds.
+    /// - `Err(ModemError::Command)` if the command fails.
     #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
     pub async fn enable_assist_gps(&mut self) -> Result<(), ModemError> {
         info!("[modem] Enable Assist GPS");
@@ -374,6 +525,11 @@ impl Modem {
         }
     }
 
+    /// Sets the modem's functionality level to full.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the command succeeds.
+    /// - `Err(ModemError::Command)` if the command fails.
     pub async fn set_modem_functionality(&mut self) -> Result<(), ModemError> {
         info!("[modem] Set Modem Functionality");
         if check_result(
@@ -389,6 +545,16 @@ impl Modem {
         }
     }
 
+    /// Uploads MQTT certificates to the modem for secure communication.
+    ///
+    /// # Parameters
+    /// - `ca_chain`: CA certificate chain (static byte array).
+    /// - `certificate`: Client certificate (static byte array).
+    /// - `private_key`: Client private key (static byte array).
+    ///
+    /// # Returns
+    /// - `Ok(())` if the upload succeeds.
+    /// - `Err(ModemError::Command)` if the upload fails.
     pub async fn upload_mqtt_cert(
         &mut self,
         ca_chain: &'static [u8],
@@ -406,6 +572,16 @@ impl Modem {
         }
     }
 
+    /// Internal function to upload MQTT certificate files and configure MQTT over TLS.
+    ///
+    /// # Parameters
+    /// - `ca_chain`: CA certificate chain.
+    /// - `certificate`: Client certificate.
+    /// - `private_key`: Client private key.
+    ///
+    /// # Returns
+    /// - `true` if the upload and configuration succeed.
+    /// - `false` if any step fails.
     async fn upload_mqtt_cert_files(
         &mut self,
         ca_chain: &[u8],
@@ -563,23 +739,25 @@ impl Modem {
         true
     }
 
+    /// Checks the modem's network registration status.
+    ///
+    /// # Returns
+    /// - `Ok(())` if registration is successful.
+    /// - `Err(ModemError::MqttPublish)` if registration fails or times out.
     pub async fn check_network_registration(&mut self) -> Result<(), ModemError> {
         info!("[modem] Check Network Registration");
         if self.check_network_registration_internal().await {
-            if !self.is_connected {
-                let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteRegistered);
-                self.is_connected = true;
-            }
             Ok(())
         } else {
-            if self.is_connected {
-                let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteUnregistered);
-                self.is_connected = false;
-            }
             Err(ModemError::MqttPublish)
         }
     }
 
+    /// Internal function to check network registration status with a timeout.
+    ///
+    /// # Returns
+    /// - `true` if the modem is registered (home or roaming).
+    /// - `false` if registration fails, is denied, or times out.
     async fn check_network_registration_internal(&mut self) -> bool {
         let timeout = Duration::from_secs(30);
         let start_time = Instant::now();
@@ -626,6 +804,11 @@ impl Modem {
         false
     }
 
+    /// Opens an MQTT connection to the configured server.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the connection is opened successfully.
+    /// - `Err(ModemError::MqttConnection)` if the connection fails.
     #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
     pub async fn mqtt_open_connection(&mut self) -> Result<(), ModemError> {
         info!("[modem] Opening MQTT connection");
@@ -637,6 +820,11 @@ impl Modem {
         Ok(())
     }
 
+    /// Internal function to open an MQTT connection with a timeout.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the connection is opened successfully.
+    /// - `Err(MqttConnectError)` if the connection fails, times out, or encounters an error.
     #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
     async fn open_mqtt_connection_internal(&mut self) -> Result<(), MqttConnectError> {
         let server = heapless::String::from_str(MQTT_SERVER_NAME)
@@ -688,19 +876,27 @@ impl Modem {
         }
     }
 
+    /// Connects to the MQTT broker with retries.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the connection is established.
+    /// - `Err(ModemError::MqttConnection)` if the connection fails after retries.
     #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
     pub async fn mqtt_connect_broker(&mut self) -> Result<(), ModemError> {
         info!("[modem] Connecting to MQTT broker");
         self.connect_mqtt_broker_internal().await.map_err(|e| {
             error!("[modem] MQTT connection failed: {e:?}");
-            let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
             ModemError::MqttConnection
         })?;
         info!("[modem] MQTT connection established");
-        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected);
         Ok(())
     }
 
+    /// Internal function to connect to the MQTT broker with retries and timeout.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the connection is established.
+    /// - `Err(MqttConnectError)` if the connection fails, times out, or encounters an error.
     #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
     async fn connect_mqtt_broker_internal(&mut self) -> Result<(), MqttConnectError> {
         const MAX_RETRIES: usize = 3;
@@ -773,6 +969,14 @@ impl Modem {
         }
     }
 
+    /// Retrieves GPS data and sends it to the provided channel.
+    ///
+    /// # Parameters
+    /// - `mqtt_client_id`: MQTT client ID used as device and trip ID.
+    /// - `gps_channel`: Channel to send `TripData` containing GPS information.
+    ///
+    /// # Notes
+    /// Currently uses hardcoded test data instead of actual GPS data retrieval.
     pub async fn get_gps(
         &mut self,
         mqtt_client_id: &str,
@@ -780,27 +984,12 @@ impl Modem {
     ) {
         info!("[GPS] Retrieving GPS data");
 
-        // match self.client.send(&RetrieveGpsRmc).await {
-        // Ok(res) => {
-        // info!("[modem] GPS RMC data received: {res:?}");
-
-        // let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
         let mut device_id = String::new();
         let mut trip_id = String::new();
         let _ = write!(&mut trip_id, "{mqtt_client_id}");
         let _ = write!(&mut device_id, "{mqtt_client_id}");
 
-        // let trip_data = TripData {
-        //     device_id,
-        //     trip_id,
-        //     latitude: ((res.latitude as u64 / 100) as f64)
-        //         + ((res.latitude % 100.0f64) / 60.0f64),
-        //     longitude: ((res.longitude as u64 / 100) as f64)
-        //         + ((res.longitude % 100.0f64) / 60.0f64),
-        //     timestamp,
-        // };
-
-        //for testing
+        // Hardcoded test data
         let trip_data = TripData {
             device_id,
             trip_id,
@@ -814,14 +1003,17 @@ impl Modem {
         } else {
             info!("[modem] GPS data sent to channel: {trip_data:?}");
         }
-        // }
-        // Err(e) => {
-        //     error!("[modem] Failed to retrieve GPS data: {e:?}");
-        // }
-        // }
     }
 }
 
+/// Checks the result of an AT command and logs the outcome.
+///
+/// # Parameters
+/// - `res`: The result of the AT command execution.
+///
+/// # Returns
+/// - `true` if the command succeeded.
+/// - `false` if the command failed.
 pub fn check_result<T>(res: Result<T, atat::Error>) -> bool
 where
     T: Debug,
@@ -838,6 +1030,7 @@ where
     }
 }
 
+/// Task to handle modem data reception asynchronously.
 #[embassy_executor::task]
 pub async fn modem_rx_handler(
     mut ingress: Ingress<'static, DefaultDigester<Urc>, Urc, 1024, 128, 3>,

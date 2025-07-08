@@ -48,6 +48,7 @@ impl Default for ConnectionStatus {
 
 pub static CONN_EVENT_CHAN: Channel<CriticalSectionRawMutex, ConnectionEvent, 16> = Channel::new();
 pub static CONN_STATUS_CHAN: Channel<CriticalSectionRawMutex, ConnectionStatus, 4> = Channel::new();
+pub static CHECK_LTE_HEALTH_CHAN: Channel<CriticalSectionRawMutex, bool, 8> = Channel::new();
 pub static SWITCH_REQUEST_CHAN: Channel<CriticalSectionRawMutex, ActiveConnection, 4> =
     Channel::new();
 pub static ACTIVE_CONNECTION_CHAN_NET: Channel<CriticalSectionRawMutex, ActiveConnection, 4> =
@@ -172,6 +173,10 @@ async fn net_health_monitor(
     }
 }
 
+/// Task to monitor LTE connection health and request health checks.
+///
+/// Periodically checks the Wi-Fi state. If Wi-Fi is not connected, sends `true` to
+/// `CHECK_LTE_HEALTH_CHAN` to request an LTE health check.
 #[embassy_executor::task]
 async fn lte_health_monitor(
     event_sender: Sender<'static, CriticalSectionRawMutex, ConnectionEvent, 16>,
@@ -181,27 +186,13 @@ async fn lte_health_monitor(
     loop {
         Timer::after(HEALTH_CHECK_INTERVAL).await;
         if esp_wifi::wifi::wifi_state() != WifiState::StaConnected {
-            // please check lte regis
-            if !lte_is_connected() {
-                match event_sender.try_send(ConnectionEvent::LteDisconnected) {
-                    Ok(_) => info!("[NetMgr] LTE disconnected"),
-                    Err(e) => warn!("[NetMgr] Failed to send LteDisconnected event: {e:?}"),
-                }
-            } else {
-                match event_sender.try_send(ConnectionEvent::LteConnected) {
-                    Ok(_) => info!("[NetMgr] LTE connected"),
-                    Err(e) => warn!("[NetMgr] Failed to send LteConnected event: {e:?}"),
-                }
+            // Send true to request LTE health check
+            match CHECK_LTE_HEALTH_CHAN.try_send(true) {
+                Ok(_) => info!("[NetMgr] Sent LTE health check request"),
+                Err(e) => warn!("[NetMgr] Failed to send LTE health check request: {e:?}"),
             }
         }
     }
-}
-
-fn lte_is_connected() -> bool {
-    // Placeholder for actual LTE connection check logic
-    // Will be fix this code after quectel state machine refactor
-    // For now, we assume LTE is connected if the state is not None
-    true
 }
 
 fn should_prefer_wifi(status: &ConnectionStatus) -> bool {

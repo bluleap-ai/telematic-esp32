@@ -8,7 +8,6 @@ mod modem;
 mod net;
 mod task;
 mod util;
-
 // Import the necessary modules
 //use crate::hal::flash;
 use crate::cfg::net_cfg::*;
@@ -178,10 +177,6 @@ async fn main(spawner: Spawner) -> ! {
     // === Quectel flow API driver ===
     // ====================================
 
-    let ca_chain = include_str!("../certx/crt.pem").as_bytes();
-    let certificate = include_str!("../certx/dvt.crt").as_bytes();
-    let private_key = include_str!("../certx/dvt.key").as_bytes();
-
     let mut quectel = Modem::new(
         client,
         pen_pin,
@@ -189,29 +184,9 @@ async fn main(spawner: Spawner) -> ! {
         &URC_CHANNEL,
         ModemModel::QuectelEG800k,
     );
-
-    // Handle modem_init Future
-    if let Err(e) = quectel.modem_init().await {
-        info!("Failed to initialize modem: {e:?}");
-    }
-
-    // Handle lte_init Result
-    if let Err(e) = quectel
-        .lte_init(MQTT_CLIENT_ID, ca_chain, certificate, private_key)
-        .await
-    {
-        info!("Failed to initialize LTE: {e:?}");
-    }
-
-    // Handle lte_init Result
-    if let Err(e) = quectel.init_mqtt_over_lte().await {
-        info!("Failed to initialize LTE: {e:?}");
-    }
-
-    // Handle modem_init Future
-    if let Err(e) = quectel.gps_init().await {
-        info!("Failed to initialize modem: {e:?}");
-    }
+    let ca_chain = include_str!("../certx/crt.pem").as_bytes();
+    let certificate = include_str!("../certx/dvt.crt").as_bytes();
+    let private_key = include_str!("../certx/dvt.key").as_bytes();
 
     // Handle spawner.spawn Result
     spawner
@@ -220,6 +195,9 @@ async fn main(spawner: Spawner) -> ! {
             quectel,
             can_channel,
             gps_channel,
+            ca_chain,
+            certificate,
+            private_key,
         ))
         .unwrap();
 
