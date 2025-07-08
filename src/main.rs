@@ -177,33 +177,33 @@ async fn main(spawner: Spawner) -> ! {
         }
     }
     let mut fs = FlashController::new(&mut flash);
-    info!("== List files in CertStore");
-    match fs.list_files(FlashRegion::Certstore).await {
-        Ok(files) => {
-            if files.is_empty() {
-                info!("(Certstore trống)");
-            } else {
-                for e in files.iter() {
-                    info!("• {:<32}  {:>6} B  @0x{:06X}", e.name, e.len, e.offset);
-                }
-            }
-        }
-        Err(e) => error!("Không duyệt được Certstore: {e:?}"),
-    }
-    //Listfile in firmware
-    match fs.list_files(FlashRegion::Firmware).await {
-        Ok(files) => {
-            if files.is_empty() {
-                info!("(Certstore trống)");
-            } else {
-                for e in files.iter() {
-                    info!("• {:<32}  {:>6} B  @0x{:06X}", e.name, e.len, e.offset);
-                }
-            }
-        }
-        Err(e) => error!("Không duyệt được Certstore: {e:?}"),
-    }
-
+    // info!("== List files in CertStore");
+    // match fs.list_files(FlashRegion::Certstore).await {
+    //     Ok(files) => {
+    //         if files.is_empty() {
+    //             info!("(Certstore trống)");
+    //         } else {
+    //             for e in files.iter() {
+    //                 info!("• {:<32}  {:>6} B  @0x{:06X}", e.name, e.len, e.offset);
+    //             }
+    //         }
+    //     }
+    //     Err(e) => error!("Không duyệt được Certstore: {e:?}"),
+    // }
+    // //Listfile in firmware
+    // match fs.list_files(FlashRegion::Firmware).await {
+    //     Ok(files) => {
+    //         if files.is_empty() {
+    //             info!("(Certstore trống)");
+    //         } else {
+    //             for e in files.iter() {
+    //                 info!("• {:<32}  {:>6} B  @0x{:06X}", e.name, e.len, e.offset);
+    //             }
+    //         }
+    //     }
+    //     Err(e) => error!("Không duyệt được Certstore: {e:?}"),
+    // }
+    fs.print_directory(FlashRegion::Certstore).await;
     spawner.spawn(can_receiver(can_rx, channel)).ok();
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(runner)).ok();

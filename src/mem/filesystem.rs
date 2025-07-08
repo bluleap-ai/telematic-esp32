@@ -788,7 +788,7 @@ impl<'a> FlashController<'a> {
     // - `list_files`: Enumerate all valid file entries within a region.
     pub async fn list_files(
         &mut self,
-        region: FlashRegion,
+        region: &FlashRegion,
     ) -> Result<Vec<DirEntry, MAX_FILES>, FsError> {
         let mut files = Vec::<DirEntry, MAX_FILES>::new();
         let info = region.info();
@@ -846,6 +846,35 @@ impl<'a> FlashController<'a> {
         Ok(files)
     }
 
+    // - `print_directory`: Print a formatted directory listing for a region.
+    // 1. Fetch all file entries using list_files
+    // 2. Format and log each entry with name, size, and offset
+    // 3. Include a summary of total files and space used
+    pub async fn print_directory(&mut self, region: FlashRegion) -> Result<(), FsError> {
+        let files = self.list_files(&region).await?;
+        let info = region.info();
+        info!("Directory of {:?}", region);
+        info!("--------------------------------");
+        info!("{:<32} {:>10} {:>12}", "Name", "Size (B)", "Offset");
+        let mut total_size = 0;
+        for entry in files.iter() {
+            info!(
+                "{:<32} {:>10} 0x{:08X}",
+                entry.name.as_str(),
+                entry.len,
+                entry.offset
+            );
+            total_size += entry.len;
+        }
+        let file_count = files.len();
+        if file_count == 0 {
+            info!("No files found in {:?}", region);
+        } else {
+            info!("--------------------------------");
+            info!("Total: {} file(s), {} bytes used", file_count, total_size);
+        }
+        Ok(())
+    }
     // - `get_flash_info`: Returns flash capacity, page size, and sector size.
     pub async fn get_flash_info(&self) -> (u32, usize, usize) {
         (
