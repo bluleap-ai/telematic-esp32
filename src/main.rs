@@ -13,6 +13,7 @@ mod util;
 //use crate::hal::flash;
 use crate::cfg::net_cfg::*;
 use crate::net::atcmd::Urc;
+use log::warn;
 use task::can::*;
 use task::lte::*;
 use task::mqtt::*;
@@ -171,7 +172,7 @@ async fn main(spawner: Spawner) -> ! {
     // ====================================
     // === Spawn RX handler Quectel ===
     // ====================================
-    let _ = spawner.spawn(modem_rx_handler(ingress, uart_rx));
+    spawner.spawn(modem_rx_handler(ingress, uart_rx)).unwrap();
 
     // ====================================
     // === Quectel flow API driver ===
@@ -202,13 +203,25 @@ async fn main(spawner: Spawner) -> ! {
         info!("Failed to initialize LTE: {e:?}");
     }
 
+    // Handle lte_init Result
+    if let Err(e) = quectel.init_mqtt_over_lte().await {
+        info!("Failed to initialize LTE: {e:?}");
+    }
+
+    // Handle modem_init Future
+    if let Err(e) = quectel.gps_init().await {
+        info!("Failed to initialize modem: {e:?}");
+    }
+
     // Handle spawner.spawn Result
-    let _ = spawner.spawn(lte_mqtt_handler(
-        MQTT_CLIENT_ID,
-        quectel,
-        can_channel,
-        gps_channel,
-    ));
+    spawner
+        .spawn(lte_mqtt_handler(
+            MQTT_CLIENT_ID,
+            quectel,
+            can_channel,
+            gps_channel,
+        ))
+        .unwrap();
 
     #[cfg(feature = "ota")]
     //wait until wifi connected

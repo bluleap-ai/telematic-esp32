@@ -243,7 +243,7 @@ impl Modem {
     }
 
     #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
-    pub async fn lte_handle_mqtt(&mut self) -> Result<(), ModemError> {
+    pub async fn init_mqtt_over_lte(&mut self) -> Result<(), ModemError> {
         info!("[modem] Starting LTE MQTT initialization");
         if self.mqtt_open_connection().await.is_ok() {
             info!("[modem] MQTT connection opened successfully");
@@ -296,7 +296,7 @@ impl Modem {
         self.pen.set_low();
         Timer::after(Duration::from_secs(1)).await;
         self.pen.set_high();
-        Timer::after(Duration::from_secs(2)).await;
+        Timer::after(Duration::from_secs(4)).await;
         Ok(())
     }
 
@@ -773,44 +773,52 @@ impl Modem {
         }
     }
 
-    #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
     pub async fn get_gps(
         &mut self,
         mqtt_client_id: &str,
         gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
     ) {
-        info!("[modem] Retrieving GPS data");
+        info!("[GPS] Retrieving GPS data");
 
-        match self.client.send(&RetrieveGpsRmc).await {
-            Ok(res) => {
-                info!("[modem] GPS RMC data received: {res:?}");
+        // match self.client.send(&RetrieveGpsRmc).await {
+        // Ok(res) => {
+        // info!("[modem] GPS RMC data received: {res:?}");
 
-                let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
-                let mut device_id = String::new();
-                let mut trip_id = String::new();
-                let _ = write!(&mut trip_id, "{mqtt_client_id}");
-                let _ = write!(&mut device_id, "{mqtt_client_id}");
+        // let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
+        let mut device_id = String::new();
+        let mut trip_id = String::new();
+        let _ = write!(&mut trip_id, "{mqtt_client_id}");
+        let _ = write!(&mut device_id, "{mqtt_client_id}");
 
-                let trip_data = TripData {
-                    device_id,
-                    trip_id,
-                    latitude: ((res.latitude as u64 / 100) as f64)
-                        + ((res.latitude % 100.0f64) / 60.0f64),
-                    longitude: ((res.longitude as u64 / 100) as f64)
-                        + ((res.longitude % 100.0f64) / 60.0f64),
-                    timestamp,
-                };
+        // let trip_data = TripData {
+        //     device_id,
+        //     trip_id,
+        //     latitude: ((res.latitude as u64 / 100) as f64)
+        //         + ((res.latitude % 100.0f64) / 60.0f64),
+        //     longitude: ((res.longitude as u64 / 100) as f64)
+        //         + ((res.longitude % 100.0f64) / 60.0f64),
+        //     timestamp,
+        // };
 
-                if gps_channel.try_send(trip_data.clone()).is_err() {
-                    error!("[modem] Failed to send TripData to channel");
-                } else {
-                    info!("[modem] GPS data sent to channel: {trip_data:?}");
-                }
-            }
-            Err(e) => {
-                error!("[modem] Failed to retrieve GPS data: {e:?}");
-            }
+        //for testing
+        let trip_data = TripData {
+            device_id,
+            trip_id,
+            latitude: 60.0f64,
+            longitude: 60.0f64,
+            timestamp: 12u64,
+        };
+
+        if gps_channel.try_send(trip_data.clone()).is_err() {
+            error!("[modem] Failed to send TripData to channel");
+        } else {
+            info!("[modem] GPS data sent to channel: {trip_data:?}");
         }
+        // }
+        // Err(e) => {
+        //     error!("[modem] Failed to retrieve GPS data: {e:?}");
+        // }
+        // }
     }
 }
 

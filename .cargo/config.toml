@@ -7,8 +7,8 @@ ESP_DEVICE_TYPE="esp32c6"
 ESP_DEVICE_NAME="esp32c6-example"
 ESP_DEVICE_VERSION="0.1.1"
 
-WIFI_SSID="Oke heh"
-WIFI_PSWD="huuvinh2002"
+WIFI_SSID="BV Public"
+WIFI_PSWD="banviencorp"
 
 MQTT_SERVER_NAME = "broker.bluleap.ai"
 MQTT_SERVER_PORT = "8883"

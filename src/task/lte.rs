@@ -1,3 +1,4 @@
+use crate::cfg::net_cfg::MQTT_CLIENT_ID;
 use crate::modem::*;
 use crate::net::atcmd::general::*;
 use crate::task::can::*;
@@ -9,7 +10,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
-use log::{error, info};
+use log::{error, info, warn};
 #[allow(dead_code)] // Suppress unused struct warning
 pub struct Lte {
     modem: Modem,
@@ -73,10 +74,10 @@ pub async fn lte_mqtt_handler(
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
 ) -> ! {
     loop {
-        info!("LTELTELTELTELTELTELTELTELTELTELTELTELTELTELTE");
         if let Err(e) = modem.check_network_registration().await {
             error!("[LTE] Network registration check failed: {e:?}");
         }
+        modem.get_gps(MQTT_CLIENT_ID, gps_channel).await;
         if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_LTE.receiver().try_receive() {
             IS_LTE.store(active_connection == ActiveConnection::Lte, Ordering::SeqCst);
             info!("[LTE] Updated IS_LTE: {}", IS_LTE.load(Ordering::SeqCst));
@@ -87,6 +88,7 @@ pub async fn lte_mqtt_handler(
             Timer::after(Duration::from_secs(1)).await;
             continue;
         }
+        info!("[LTE] Using LTE connection");
 
         if let Ok(frame) = can_channel.try_receive() {
             let mut can_topic: heapless::String<128> = heapless::String::new();
@@ -99,6 +101,13 @@ pub async fn lte_mqtt_handler(
                 len: frame.len,
                 data: frame.data,
             };
+
+            // for testing
+            // let can_data = CanFrame {
+            //     id: 0,
+            //     len: 0,
+            //     data: [0, 1, 2, 3, 4, 5, 6, 7],
+            // };
 
             let _ = core::fmt::write(
                 &mut can_topic,
@@ -127,7 +136,8 @@ pub async fn lte_mqtt_handler(
                             })
                             .await,
                     ) {
-                        info!("[LTE] CAN data published successfully");
+                        warn!("[LTE] CAN data published successfully");
+                        // Timer::after(Duration::from_secs(2)).await;
                     } else {
                         error!("[LTE] Failed to publish CAN data");
                     }

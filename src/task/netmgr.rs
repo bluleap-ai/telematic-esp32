@@ -159,15 +159,15 @@ async fn net_health_monitor(
     loop {
         Timer::after(HEALTH_CHECK_INTERVAL).await;
         if esp_wifi::wifi::wifi_state() != WifiState::StaConnected {
-            event_sender
-                .try_send(ConnectionEvent::WiFiDisconnected)
-                .unwrap();
-            info!("[NetMgr] WiFi disconnected");
+            match event_sender.try_send(ConnectionEvent::WiFiDisconnected) {
+                Ok(_) => info!("[NetMgr] WiFi disconnected"),
+                Err(e) => warn!("[NetMgr] Failed to send WiFiDisconnected event: {e:?}"),
+            }
         } else {
-            event_sender
-                .try_send(ConnectionEvent::WiFiConnected)
-                .unwrap();
-            info!("[NetMgr] WiFi is connected");
+            match event_sender.try_send(ConnectionEvent::WiFiConnected) {
+                Ok(_) => info!("[NetMgr] WiFi is connected"),
+                Err(e) => warn!("[NetMgr] Failed to send WiFiConnected event: {e:?}"),
+            }
         }
     }
 }
@@ -180,10 +180,19 @@ async fn lte_health_monitor(
 
     loop {
         Timer::after(HEALTH_CHECK_INTERVAL).await;
-        // Will be fix this code after quectel state machine refactor
-        // For now, we assume LTE is connected if the state is not None
-        if !lte_is_connected() {
-            let _ = event_sender.try_send(ConnectionEvent::LteDisconnected);
+        if esp_wifi::wifi::wifi_state() != WifiState::StaConnected {
+            // please check lte regis
+            if !lte_is_connected() {
+                match event_sender.try_send(ConnectionEvent::LteDisconnected) {
+                    Ok(_) => info!("[NetMgr] LTE disconnected"),
+                    Err(e) => warn!("[NetMgr] Failed to send LteDisconnected event: {e:?}"),
+                }
+            } else {
+                match event_sender.try_send(ConnectionEvent::LteConnected) {
+                    Ok(_) => info!("[NetMgr] LTE connected"),
+                    Err(e) => warn!("[NetMgr] Failed to send LteConnected event: {e:?}"),
+                }
+            }
         }
     }
 }

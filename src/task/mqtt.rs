@@ -48,6 +48,7 @@ pub async fn wifi_mqtt_handler(
             continue;
         }
 
+        info!("[WIFI] Using WIFI connection");
         // Ensure the stack is connected
         if !stack.is_link_up() {
             Timer::after(Duration::from_millis(500)).await;
@@ -181,7 +182,8 @@ pub async fn wifi_mqtt_handler(
                     error!("[WIFI] Failed to publish MQTT packet: {e:?}");
                     break;
                 }
-                info!("[WIFI] MQTT GPS sent OK {trip_str}");
+                info!("[WIFI] MQTT GPS sent OK");
+                info!("{trip_str}");
             }
 
             mqtt_client.poll().await;
