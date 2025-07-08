@@ -21,9 +21,9 @@
 // * A 0xFF byte at the start indicates an unused entry.
 // * CRC32 is computed over `data_len` (4 bytes, LE) and `data`.
 
-pub mod ex_flash;
+// pub mod ex_flash;
 #[allow(unused_imports)]
-use crate::filesystem::ex_flash::{ExFlashError, W25Q128FVSG};
+use crate::mem::ex_flash::{ExFlashError, W25Q128FVSG};
 use embassy_executor::Spawner;
 use embassy_time::{with_timeout, Duration, Timer};
 use esp_backtrace as _;

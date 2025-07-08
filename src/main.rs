@@ -4,20 +4,21 @@
 // Declare modules at the crate root
 mod cfg;
 mod hal;
+mod mem;
 mod net;
 mod task;
 mod util;
-
 // Import the necessary modules
 //use crate::hal::flash;
 use crate::net::atcmd::Urc;
+use mem::ex_flash::{ExFlashError, W25Q128FVSG};
+use mem::filesystem::{FlashController, FlashRegion};
 use task::can::*;
 use task::lte::*;
 use task::mqtt::*;
 #[cfg(feature = "ota")]
 use task::ota::ota_handler;
 use task::wifi::*;
-
 // Import the necessary modules
 use atat::{ResponseSlot, UrcChannel};
 use embassy_executor::Spawner;
@@ -34,12 +35,17 @@ use esp_hal::{
     clock::CpuClock,
     gpio::Output,
     rng::Trng,
+    spi::{
+        master::{Config as otherConfig, Spi},
+        Mode,
+    },
+    time::RateExtU32,
     timer::timg::TimerGroup,
     twai::{self, TwaiMode},
     uart::{Config, Uart},
 };
 use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
-use log::info;
+use log::{error, info};
 use static_cell::StaticCell;
 use task::lte::TripData;
 use task::netmgr::net_manager_task;
@@ -147,6 +153,57 @@ async fn main(spawner: Spawner) -> ! {
     let (can_rx, _can_tx) = can.split();
 
     let gps_channel = &*GPS_CHANNEL.init(Channel::new());
+
+    let sclk = peripherals.GPIO18;
+    let miso = peripherals.GPIO20;
+    let mosi = peripherals.GPIO19;
+    let cs = Output::new(peripherals.GPIO3, esp_hal::gpio::Level::High);
+    let spi = Spi::new(
+        peripherals.SPI2,
+        otherConfig::default()
+            .with_frequency(10u32.MHz())
+            .with_mode(Mode::_0),
+    )
+    .unwrap()
+    .with_sck(sclk)
+    .with_mosi(mosi)
+    .with_miso(miso);
+    let mut flash = W25Q128FVSG::new(spi, cs);
+    match flash.init().await {
+        Ok(()) => info!("✓ Flash initialized successfully"),
+        Err(e) => {
+            error!("✗ Flash initialization failed: {e:?}");
+            panic!("Cannot continue without flash");
+        }
+    }
+    let mut fs = FlashController::new(&mut flash);
+    info!("== List files in CertStore");
+    match fs.list_files(FlashRegion::Certstore).await {
+        Ok(files) => {
+            if files.is_empty() {
+                info!("(Certstore trống)");
+            } else {
+                for e in files.iter() {
+                    info!("• {:<32}  {:>6} B  @0x{:06X}", e.name, e.len, e.offset);
+                }
+            }
+        }
+        Err(e) => error!("Không duyệt được Certstore: {e:?}"),
+    }
+    //Listfile in firmware
+    match fs.list_files(FlashRegion::Firmware).await {
+        Ok(files) => {
+            if files.is_empty() {
+                info!("(Certstore trống)");
+            } else {
+                for e in files.iter() {
+                    info!("• {:<32}  {:>6} B  @0x{:06X}", e.name, e.len, e.offset);
+                }
+            }
+        }
+        Err(e) => error!("Không duyệt được Certstore: {e:?}"),
+    }
+
     spawner.spawn(can_receiver(can_rx, channel)).ok();
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(runner)).ok();

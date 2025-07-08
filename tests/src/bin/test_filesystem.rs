@@ -4,8 +4,12 @@
 // #[path = "../../../src/mem/ex_flash.rs"]
 // mod ex_flash
 #[allow(unused_imports)]
+#[path = "../../../src/mem/ex_flash.rs"]
+mod ex_flash;
+#[allow(unused_imports)]
 #[path = "../../../src/mem/filesystem.rs"]
 mod filesystem;
+
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
@@ -51,7 +55,7 @@ async fn main(_spawner: Spawner) -> ! {
     .with_sck(sclk)
     .with_mosi(mosi)
     .with_miso(miso);
-    let mut flash = filesystem::ex_flash::W25Q128FVSG::new(spi, cs);
+    let mut flash = ex_flash::W25Q128FVSG::new(spi, cs);
     match flash.init().await {
         Ok(()) => info!("✓ Flash initialized successfully"),
         Err(e) => {
