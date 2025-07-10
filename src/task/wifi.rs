@@ -38,13 +38,6 @@ pub async fn connection(mut controller: WifiController<'static>) {
             }
         }
         info!("[WiFi] Attempting to connect to SSID: {WIFI_SSID}...");
-            info!("[WiFi] Starting WiFi STA for SSID: {WIFI_SSID}");
-            if let Err(e) = controller.start_async().await {
-                warn!("[WiFi] Failed to start controller: {e:?}");
-                continue;
-            }
-        }
-        info!("[WiFi] Attempting to connect to SSID: {WIFI_SSID}...");
 
         match controller.connect_async().await {
             Ok(_) => info!("[WiFi] Successfully connected to SSID: {WIFI_SSID}"),

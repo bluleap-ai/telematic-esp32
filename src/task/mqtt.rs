@@ -76,10 +76,10 @@ pub async fn wifi_mqtt_handler(
         }
 
         let certificates = Certificates {
-            ca_chain: X509::pem(concat!(include_str!("../../cert/crt.pem"), "\0").as_bytes()).ok(),
-            certificate: X509::pem(concat!(include_str!("../../cert/dvt.crt"), "\0").as_bytes())
+            ca_chain: X509::pem(concat!(include_str!("../../certs/crt.pem"), "\0").as_bytes()).ok(),
+            certificate: X509::pem(concat!(include_str!("../../certs/dvt.crt"), "\0").as_bytes())
                 .ok(),
-            private_key: X509::pem(concat!(include_str!("../../cert/dvt.key"), "\0").as_bytes())
+            private_key: X509::pem(concat!(include_str!("../../certs/dvt.key"), "\0").as_bytes())
                 .ok(),
             password: None,
         };

@@ -9,10 +9,10 @@
 
 # Ignore certificate files in certs directory
 
-cert/
-cert/*
+certs/
+certs/*
 
-cert/dvt.crt
-cert/dvt.key
-cert/ca.crt
-cert/
+certs/dvt.crt
+certs/dvt.key
+certs/ca.crt
+certs/

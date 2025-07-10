@@ -66,7 +66,7 @@ Root Directory
 ├── build.rs             # Build script
 ├── Cargo.toml           # Workspace manifest
 ├── README.md            # Project documentation
-├── cert/               # Certificates for secure communication
+├── certs/               # Certificates for secure communication
 ├── scripts/             # Utility scripts
 ├── src/                 # Application source code
 │   ├── main.rs          # Entry point (init hardware, start tasks)
