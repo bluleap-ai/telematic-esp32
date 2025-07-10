@@ -14,21 +14,13 @@ pub async fn connection(mut controller: WifiController<'static>) {
         controller.capabilities()
     );
     info!("[WiFi] Disabling power saving mode");
-    info!("[WiFi] Connection task started");
-    info!(
-        "[WiFi] Device capabilities: {:?}",
-        controller.capabilities()
-    );
-    info!("[WiFi] Disabling power saving mode");
     controller
         .set_power_saving(esp_wifi::config::PowerSaveMode::None)
         .unwrap();
     loop {
         if esp_wifi::wifi::wifi_state() == WifiState::StaConnected {
             info!("[WiFi] Already connected. Waiting for disconnect event...");
-            info!("[WiFi] Already connected. Waiting for disconnect event...");
             controller.wait_for_event(WifiEvent::StaDisconnected).await;
-            info!("[WiFi] Disconnected. Reconnecting in 5 seconds...");
             info!("[WiFi] Disconnected. Reconnecting in 5 seconds...");
             Timer::after(Duration::from_millis(5000)).await
         }
@@ -56,10 +48,7 @@ pub async fn connection(mut controller: WifiController<'static>) {
 
         match controller.connect_async().await {
             Ok(_) => info!("[WiFi] Successfully connected to SSID: {WIFI_SSID}"),
-            Ok(_) => info!("[WiFi] Successfully connected to SSID: {WIFI_SSID}"),
             Err(e) => {
-                error!("[WiFi] Failed to connect to SSID: {WIFI_SSID}: {e:?}");
-                info!("[WiFi] Retrying in 5 seconds...");
                 error!("[WiFi] Failed to connect to SSID: {WIFI_SSID}: {e:?}");
                 info!("[WiFi] Retrying in 5 seconds...");
                 Timer::after(Duration::from_millis(5000)).await
@@ -70,7 +59,6 @@ pub async fn connection(mut controller: WifiController<'static>) {
 
 #[embassy_executor::task]
 pub async fn net_task(mut runner: Runner<'static, WifiDevice<'static, WifiStaDevice>>) {
-    info!("[WiFi] Network task started");
     info!("[WiFi] Network task started");
     runner.run().await
 }

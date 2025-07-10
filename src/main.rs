@@ -5,13 +5,18 @@
 mod cfg;
 mod hal;
 mod mem;
+mod mem;
+mod net;
 mod net;
 mod task;
 mod util;
 // Import the necessary modules
 //use crate::hal::flash;
 use crate::net::atcmd::Urc;
+use crate::net::atcmd::Urc;
 use mem::ex_flash::{ExFlashError, W25Q128FVSG};
+use mem::ex_flash::{ExFlashError, W25Q128FVSG};
+use mem::filesystem::{FileEntry, FlashController, FlashRegion};
 use mem::filesystem::{FileEntry, FlashController, FlashRegion};
 use task::can::*;
 use task::lte::*;
@@ -23,6 +28,7 @@ use task::wifi::*;
 use atat::{ResponseSlot, UrcChannel};
 use embassy_executor::Spawner;
 use embassy_net::{Stack, StackResources};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 #[cfg(feature = "ota")]
@@ -39,6 +45,11 @@ use esp_hal::{
         master::{Config as otherConfig, Spi},
         Mode,
     },
+    spi::{
+        master::{Config as otherConfig, Spi},
+        Mode,
+    },
+    time::RateExtU32,
     time::RateExtU32,
     timer::timg::TimerGroup,
     twai::{self, TwaiMode},
@@ -46,8 +57,8 @@ use esp_hal::{
 };
 use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
 use log::info;
-use modem::*;
 use log::{error, info};
+use modem::*;
 use static_cell::StaticCell;
 use task::netmgr::net_manager_task;
 pub type GpsOutbox = Channel<NoopRawMutex, TripData, 8>;
@@ -227,8 +238,6 @@ async fn main(spawner: Spawner) -> ! {
             stack,
             can_channel,
             gps_channel,
-            channel,
-            gps_channel,
             peripherals.SHA,
             peripherals.RSA,
         ))
@@ -264,18 +273,8 @@ async fn main(spawner: Spawner) -> ! {
             ca_chain,
             certificate,
             private_key,
-        .spawn(quectel_tx_handler(
-            client,
-            quectel_pen_pin,
-            quectel_dtr_pin,
-            &URC_CHANNEL,
-            gps_channel,
-            channel,
         ))
         .unwrap();
-
-    spawner.spawn(net_manager_task(spawner)).unwrap();
-        .ok();
 
     spawner.spawn(net_manager_task(spawner)).ok();
     #[cfg(feature = "ota")]
