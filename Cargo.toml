@@ -68,6 +68,21 @@ smoltcp = { version = "0.12.0", default-features = false, features = [
 # Use serde with no_std compatibility
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde-json-core = { version = "0.6.0", default-features = false }
+crc32fast = { version = "1.4.2", default-features = false }
+
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1        # LLVM can perform better optimizations using a single thread
+debug = 2
+debug-assertions = false
+incremental = false
+lto = 'fat'
+opt-level = 's'
+overflow-checks = false
 
 [features]
 default = [
@@ -80,27 +95,21 @@ default = [
 ]
 ota = []
 wdg = []
+test = []
 
-[profile.dev]
-# Rust debug is too slow.
-# For debug builds always builds with some optimization
-opt-level = "s"
+# These dependencies are not included in the compiled binary when building the project for release
+# (cargo build --release).
+[dev-dependencies]
+probe-rs = "0.27.0"
 
-[profile.release]
-codegen-units = 1        # LLVM can perform better optimizations using a single thread
-debug = 2
-debug-assertions = false
-incremental = false
-lto = "fat"
-opt-level = "s"
-overflow-checks = false
+# [[bin]]
+# name = "test_ex_flash"
+# path = "tests/src/bin/test_ex_flash.rs"
 
-# Test binaries
-[[bin]]
-name = "test_ex_flash"
-path = "tests/src/bin/test_ex_flash.rs"
+# [[bin]]
+# name = "test_fs"
+# path = "tests/src/bin/test_fs.rs"
 
-
-[[bin]]
-name = "test_fs"
-path = "tests/src/bin/test_fs.rs"
+# [[bin]]
+# name = "test_filesystem"
+# path = "tests/src/bin/test_filesystem.rs"
