@@ -37,7 +37,7 @@ pub enum ModemModel {
 
 #[allow(dead_code)] // Suppress warnings for unused variants
 /// Possible modem-related errors.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ModemError {
     Command,             // AT command failed
     MqttConnection,      // MQTT connection error
@@ -89,9 +89,11 @@ pub enum State {
 pub struct Modem {
     pub client: Client<'static, UartTx<'static, Async>, 1024>, // AT command client
     pen: Output<'static>,                                      // Modem power enable pin
-    dtr: Output<'static>,                                      // Data terminal ready pin (optional)
+    #[allow(dead_code)] // Suppress warnings for unused variants
+    dtr: Output<'static>, // Data terminal ready pin (optional)
     urc_channel: &'static UrcChannel<Urc, 128, 3>, // Channel for unsolicited result codes
-    is_connected: bool,                            // MQTT connection state
+    #[allow(dead_code)] // Suppress warnings for unused variants
+    is_connected: bool, // MQTT connection state
     modem_model: ModemModel,                       // Modem model type
 }
 
@@ -169,11 +171,13 @@ impl Modem {
                     if self.get_software_version().await.is_ok() {
                         info!("[modem] Software version retrieved successfully");
                         break;
+                        // state = State::GetSimCardStatus;
                     } else {
                         error!("[modem] Modem init failed at GetSoftwareVersion");
                         return Err(ModemError::Command);
                     }
                 }
+
                 _ => {
                     error!("[modem] Invalid state in modem_init: {state:?}");
                     return Err(ModemError::Command);
@@ -204,6 +208,7 @@ impl Modem {
         private_key: &'static [u8],
     ) -> Result<(), ModemError> {
         info!("[modem] Starting LTE initialization");
+        // let mut state = State::GetNetworkSignalQuality;
         let mut state = State::GetSimCardStatus;
 
         loop {
@@ -293,6 +298,7 @@ impl Modem {
                     if self.mqtt_open_connection().await.is_ok() {
                         info!("[modem] MQTT connection opened successfully");
                         state = State::MqttConnectBroker;
+                        // break;
                     } else {
                         error!("[modem] Failed to open MQTT connection");
                         return Err(ModemError::MqttConnection);
@@ -328,9 +334,7 @@ impl Modem {
     /// Sends connection events (`LteUnregistered`, `LteDisconnected`, `LteConnected`) to `CONN_EVENT_CHAN`.
     #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
     pub async fn health_check_lte(&mut self) -> Result<(), ModemError> {
-        info!("[modem] Starting LTE MQTT initialization");
         let mut state = State::CheckNetworkRegistration;
-
         loop {
             match state {
                 State::CheckNetworkRegistration => {
@@ -811,12 +815,19 @@ impl Modem {
     /// - `Err(ModemError::MqttConnection)` if the connection fails.
     #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
     pub async fn mqtt_open_connection(&mut self) -> Result<(), ModemError> {
+        info!("[modem] Closing MQTT connection");
+        self.client
+            .send(&MqttClose { tcp_connect_id: 0 })
+            .await
+            .map_err(|e| {
+                error!("[modem] Failed to open MQTT connection: {e:?}");
+                ModemError::MqttConnection
+            })?;
         info!("[modem] Opening MQTT connection");
         self.open_mqtt_connection_internal().await.map_err(|e| {
             error!("[modem] Failed to open MQTT connection: {e:?}");
             ModemError::MqttConnection
         })?;
-        info!("[modem] MQTT connection opened successfully");
         Ok(())
     }
 
@@ -981,27 +992,89 @@ impl Modem {
         &mut self,
         mqtt_client_id: &str,
         gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
-    ) {
-        info!("[GPS] Retrieving GPS data");
+    ) -> Result<(), ModemError> {
+        // --- GPS Data ---
 
-        let mut device_id = String::new();
-        let mut trip_id = String::new();
-        let _ = write!(&mut trip_id, "{mqtt_client_id}");
-        let _ = write!(&mut device_id, "{mqtt_client_id}");
+        let trip_topic: heapless::String<128> = heapless::String::new();
+        let mut trip_payload: heapless::String<1024> = heapless::String::new();
+        let mut buf: [u8; 1024] = [0u8; 1024];
 
-        // Hardcoded test data
-        let trip_data = TripData {
-            device_id,
-            trip_id,
-            latitude: 60.0f64,
-            longitude: 60.0f64,
-            timestamp: 12u64,
-        };
+        let trip_result = self.client.send(&RetrieveGpsRmc).await;
 
-        if gps_channel.try_send(trip_data.clone()).is_err() {
-            error!("[modem] Failed to send TripData to channel");
-        } else {
-            info!("[modem] GPS data sent to channel: {trip_data:?}");
+        match trip_result {
+            Ok(res) => {
+                info!("[LTE] GPS RMC data received: {res:?}");
+
+                let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
+                let mut device_id = heapless::String::new();
+                let mut trip_id = heapless::String::new();
+                write!(&mut trip_id, "{mqtt_client_id}").unwrap();
+                write!(&mut device_id, "{mqtt_client_id}").unwrap();
+
+                let trip_data = TripData {
+                    device_id,
+                    trip_id,
+                    latitude: ((res.latitude as u64 / 100) as f64)
+                        + ((res.latitude % 100.0f64) / 60.0f64),
+                    longitude: ((res.longitude as u64 / 100) as f64)
+                        + ((res.longitude % 100.0f64) / 60.0f64),
+                    timestamp,
+                };
+
+                // Hardcoded test data
+                // let trip_data = TripData {
+                //     device_id,
+                //     trip_id,
+                //     latitude: 60.0f64,
+                //     longitude: 60.0f64,
+                //     timestamp: 12u64,
+                // };
+
+                if gps_channel.try_send(trip_data.clone()).is_err() {
+                    error!("[LTE] Failed to send TripData to channel");
+                } else {
+                    info!("[LTE] GPS data sent to channel: {trip_data:?}");
+                }
+
+                // Serialize to JSON
+                if let Ok(len) = serde_json_core::to_slice(&trip_data, &mut buf) {
+                    let json = core::str::from_utf8(&buf[..len])
+                        .unwrap_or_default()
+                        .replace('\"', "'");
+
+                    if trip_payload.push_str(&json).is_err() {
+                        error!("[LTE] Payload buffer overflow");
+                        return Err(ModemError::Command);
+                    }
+
+                    info!("[LTE] MQTT payload (GPS/trip): {trip_payload}");
+                    if check_result(
+                        self.client
+                            .send(&MqttPublishExtended {
+                                tcp_connect_id: 0,
+                                msg_id: 0,
+                                qos: 0,
+                                retain: 0,
+                                topic: trip_topic,
+                                payload: trip_payload,
+                            })
+                            .await,
+                    ) {
+                        info!("[LTE] Trip data published successfully");
+                        Ok(())
+                    } else {
+                        error!("[LTE] Failed to publish trip data");
+                        Err(ModemError::Command)
+                    }
+                } else {
+                    error!("[LTE] Failed to serialize trip/GPS data");
+                    Err(ModemError::Command)
+                }
+            }
+            Err(e) => {
+                warn!("[LTE] Failed to retrieve GPS data: {e:?}");
+                Err(ModemError::Command)
+            }
         }
     }
 }

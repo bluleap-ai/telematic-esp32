@@ -76,10 +76,10 @@ pub async fn wifi_mqtt_handler(
         }
 
         let certificates = Certificates {
-            ca_chain: X509::pem(concat!(include_str!("../../certx/crt.pem"), "\0").as_bytes()).ok(),
-            certificate: X509::pem(concat!(include_str!("../../certx/dvt.crt"), "\0").as_bytes())
+            ca_chain: X509::pem(concat!(include_str!("../../cert/crt.pem"), "\0").as_bytes()).ok(),
+            certificate: X509::pem(concat!(include_str!("../../cert/dvt.crt"), "\0").as_bytes())
                 .ok(),
-            private_key: X509::pem(concat!(include_str!("../../certx/dvt.key"), "\0").as_bytes())
+            private_key: X509::pem(concat!(include_str!("../../cert/dvt.key"), "\0").as_bytes())
                 .ok(),
             password: None,
         };
@@ -183,7 +183,6 @@ pub async fn wifi_mqtt_handler(
                     break;
                 }
                 info!("[WIFI] MQTT GPS sent OK");
-                info!("{trip_str}");
             }
 
             mqtt_client.poll().await;

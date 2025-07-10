@@ -74,12 +74,10 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
     // Start health monitoring tasks
     let health_sender = CONN_EVENT_CHAN.sender();
     spawner.spawn(net_health_monitor(health_sender)).ok();
-    spawner.spawn(lte_health_monitor(health_sender)).ok();
 
     loop {
         let event_fut = event_receiver.receive();
         let timer_fut = Timer::after(HEALTH_CHECK_INTERVAL);
-
         match select(event_fut, timer_fut).await {
             embassy_futures::select::Either::First(event) => {
                 info!("[NetMgr] Got connection event: {event:?}");
@@ -94,6 +92,24 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
                     }
                     ConnectionEvent::WiFiDisconnected => {
                         info!("[NetMgr] handle WiFi disconnected event");
+                        if !is_lte_available(&status)
+                            && (esp_wifi::wifi::wifi_state() != WifiState::StaConnected)
+                        {
+                            while !CHECK_LTE_HEALTH_CHAN.is_empty() {
+                                let _ = CHECK_LTE_HEALTH_CHAN.receiver().try_receive();
+                            }
+                            match CHECK_LTE_HEALTH_CHAN.try_send(true) {
+                                Ok(_) => info!("[NetMgr] Sent LTE health check request"),
+                                Err(e) => {
+                                    warn!("[NetMgr] Failed to send LTE health check request: {e:?}")
+                                }
+                            }
+                            info!(
+                                "[NetMgr] Current size of CHECK_LTE_HEALTH_CHAN: {}",
+                                CHECK_LTE_HEALTH_CHAN.len()
+                            );
+                        }
+
                         status.wifi_available = false;
                         if status.active == ActiveConnection::WiFi {
                             if status.lte_available {
@@ -130,11 +146,23 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
                 // Notify others of status change
                 let _ = status_sender.try_send(status);
                 let _ = active_net_sender.try_send(status.active);
+                info!("[NetMgr] Notify {:?}", status.active);
+                info!(
+                    "[NetMgr] Current size of ACTIVE_CONNECTION_CHAN_LTE: {}",
+                    ACTIVE_CONNECTION_CHAN_LTE.len()
+                );
+                while !ACTIVE_CONNECTION_CHAN_LTE.is_empty() {
+                    let _ = ACTIVE_CONNECTION_CHAN_LTE.receiver().try_receive();
+                }
+
                 let _ = active_lte_sender.try_send(status.active); // Added for LTE
+                info!(
+                    "[NetMgr] Current size of ACTIVE_CONNECTION_CHAN_LTE: {}",
+                    ACTIVE_CONNECTION_CHAN_LTE.len()
+                );
             }
             embassy_futures::select::Either::Second(_) => {
                 info!("[NetMgr] Health check timeout reached");
-                // handle timeout
             }
         }
 
@@ -144,6 +172,7 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
                 perform_net_switch(&mut status, requested_connection).await;
                 let _ = status_sender.try_send(status);
                 let _ = active_net_sender.try_send(status.active);
+                info!("[NetMgr] Notify is have bug here? {:?}", status.active);
                 let _ = active_lte_sender.try_send(status.active); // Added for LTE
             } else {
                 warn!("[NetMgr] Cannot switch to {requested_connection:?} - not available");
@@ -173,26 +202,8 @@ async fn net_health_monitor(
     }
 }
 
-/// Task to monitor LTE connection health and request health checks.
-///
-/// Periodically checks the Wi-Fi state. If Wi-Fi is not connected, sends `true` to
-/// `CHECK_LTE_HEALTH_CHAN` to request an LTE health check.
-#[embassy_executor::task]
-async fn lte_health_monitor(
-    event_sender: Sender<'static, CriticalSectionRawMutex, ConnectionEvent, 16>,
-) -> ! {
-    info!("[NetMgr] LTE health monitor started");
-
-    loop {
-        Timer::after(HEALTH_CHECK_INTERVAL).await;
-        if esp_wifi::wifi::wifi_state() != WifiState::StaConnected {
-            // Send true to request LTE health check
-            match CHECK_LTE_HEALTH_CHAN.try_send(true) {
-                Ok(_) => info!("[NetMgr] Sent LTE health check request"),
-                Err(e) => warn!("[NetMgr] Failed to send LTE health check request: {e:?}"),
-            }
-        }
-    }
+fn is_lte_available(status: &ConnectionStatus) -> bool {
+    status.lte_available
 }
 
 fn should_prefer_wifi(status: &ConnectionStatus) -> bool {

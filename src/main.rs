@@ -12,7 +12,6 @@ mod util;
 //use crate::hal::flash;
 use crate::cfg::net_cfg::*;
 use crate::net::atcmd::Urc;
-use log::warn;
 use task::can::*;
 use task::lte::*;
 use task::mqtt::*;
@@ -166,7 +165,6 @@ async fn main(spawner: Spawner) -> ! {
             peripherals.RSA,
         ))
         .unwrap();
-    spawner.spawn(net_manager_task(spawner)).unwrap();
 
     // ====================================
     // === Spawn RX handler Quectel ===
@@ -177,20 +175,20 @@ async fn main(spawner: Spawner) -> ! {
     // === Quectel flow API driver ===
     // ====================================
 
-    let mut quectel = Modem::new(
+    let quectel = Modem::new(
         client,
         pen_pin,
         dtr_pin,
         &URC_CHANNEL,
         ModemModel::QuectelEG800k,
     );
-    let ca_chain = include_str!("../certx/crt.pem").as_bytes();
-    let certificate = include_str!("../certx/dvt.crt").as_bytes();
-    let private_key = include_str!("../certx/dvt.key").as_bytes();
+    let ca_chain = include_str!("../cert/crt.pem").as_bytes();
+    let certificate = include_str!("../cert/dvt.crt").as_bytes();
+    let private_key = include_str!("../cert/dvt.key").as_bytes();
 
     // Handle spawner.spawn Result
     spawner
-        .spawn(lte_mqtt_handler(
+        .spawn(lte_mqtt_handler_fsm(
             MQTT_CLIENT_ID,
             quectel,
             can_channel,
@@ -201,6 +199,7 @@ async fn main(spawner: Spawner) -> ! {
         ))
         .unwrap();
 
+    spawner.spawn(net_manager_task(spawner)).unwrap();
     #[cfg(feature = "ota")]
     //wait until wifi connected
     {
