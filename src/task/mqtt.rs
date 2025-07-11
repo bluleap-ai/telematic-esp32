@@ -18,12 +18,23 @@ use crate::net::{dns::DnsBuilder, mqtt::MqttClient};
 use crate::task::can::TwaiOutbox;
 // use crate::task::netmgr::CONN_EVENT_CHAN;
 use crate::task::netmgr::{ActiveConnection, ACTIVE_CONNECTION_CHAN_NET};
-use core::fmt::Write;
+use core::{fmt::Write};
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
 static IS_WIFI: AtomicBool = AtomicBool::new(false);
 
+/// Wifi MQTT handler task
+/// This task performs:
+/// 
+/// 1.Monitors if WiFi or LTE should be used for MQTT
+/// 2.Ensures WiFi network stack is connected and stable
+/// 3.Resolves the MQTT broker's hostname to an IP address
+/// 4.Establishes a TCP connection to the MQTT broker
+/// 5.Creates an encrypted TLS 1.3 session with client certificates
+/// 6.Authenticates and connects to the MQTT broker
+/// 7.Continuously publishes CAN and GPS data as JSON
+/// 8.On any failure, restarts the entire connection process
 #[allow(clippy::uninlined_format_args)]
 #[embassy_executor::task]
 pub async fn wifi_mqtt_handler(
@@ -33,7 +44,10 @@ pub async fn wifi_mqtt_handler(
     mut sha: SHA,
     mut rsa: RSA,
 ) -> ! {
+    // Outer loop handles the complete MQTT connection lifecycle.
+    // If any step fails, restart from the beginning.
     loop {
+        // Check whether use Wifi or LTE for MQTT
         if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_NET.receiver().try_receive() {
             IS_WIFI.store(
                 active_connection == ActiveConnection::WiFi,
@@ -42,7 +56,8 @@ pub async fn wifi_mqtt_handler(
             info!("[MQTT] Updated IS_WIFI: {}", IS_WIFI.load(Ordering::SeqCst));
         }
 
-        // Check if WiFi is active, wait if not
+        // Check if WiFi is active
+        // If not wifi, wait and check again
         if !IS_WIFI.load(Ordering::SeqCst) {
             Timer::after(Duration::from_millis(500)).await;
             continue;
@@ -67,9 +82,11 @@ pub async fn wifi_mqtt_handler(
             }
         };
 
+        // TCP Connection Establishment
         let mut rx_buffer = [0; 4096];
         let mut tx_buffer = [0; 4096];
         let mut socket = TcpSocket::new(*stack, &mut rx_buffer, &mut tx_buffer);
+        // Attempt to connect to the MQTT broker
         if let Err(e) = socket.connect(remote_endpoint).await {
             error!("[MQTT] Failed to connect: {e:?}");
             continue;
@@ -84,7 +101,14 @@ pub async fn wifi_mqtt_handler(
             password: None,
         };
 
-        let tls = Tls::new(&mut sha).unwrap().with_hardware_rsa(&mut rsa);
+        //  TLS Session Establishment
+        let tls = match Tls::new(&mut sha) {
+            Ok(tls) => tls.with_hardware_rsa(&mut rsa),
+            Err(e) => {
+                error!("[MQTT] Failed to initialize TLS context: {e:?}");
+                continue;  // Retry on TLS initialization failure
+            }
+        };
         let session = match Session::new(
             socket,
             Mode::Client {
@@ -116,24 +140,32 @@ pub async fn wifi_mqtt_handler(
         }
 
         info!("[MQTT] Connected to broker");
+        // Inner loop continuously publishes telematic data to the broker
         loop {
+            // CAN Bus message processing
             if let Ok(frame) = can_channel.try_receive() {
                 let mut frame_str: heapless::String<80> = heapless::String::new();
                 let mut can_topic: heapless::String<80> = heapless::String::new();
 
-                writeln!(
+                if writeln!(
                     &mut frame_str,
                     "{{\"id\": \"{:08X}\", \"len\": {}, \"data\": \"{:02X?}\"}}",
                     frame.id, frame.len, frame.data
                 )
-                .unwrap();
+                .is_err() {
+                    error!("[WIFI] Failed to format CAN frame JSON");
+                    continue; 
+                }
 
-                writeln!(
+                if writeln!(
                     &mut can_topic,
                     "channels/{}/messages/client/can",
                     MQTT_CLIENT_ID
                 )
-                .unwrap();
+                .is_err() {
+                    error!("[WIFI] Failed to format CAN topic string");
+                    continue; 
+                }
 
                 if let Err(e) = mqtt_client
                     .publish(&can_topic, frame_str.as_bytes(), mqttrust::QoS::AtMostOnce)
@@ -144,7 +176,7 @@ pub async fn wifi_mqtt_handler(
                 }
                 info!("[WIFI] MQTT CAN sent OK {frame_str}");
             }
-
+            // GPS/Trip data processing
             if let Ok(trip_data) = gps_channel.try_receive() {
                 info!("[WIFI] GPS data received from channel: {trip_data:?}");
                 let mut trip_payload: heapless::String<1024> = heapless::String::new();
@@ -164,14 +196,22 @@ pub async fn wifi_mqtt_handler(
                 } else {
                     error!("[WIFI] Failed to serialize trip data");
                 }
-                writeln!(
+                
+                if writeln!(
                     &mut trip_topic,
                     "channels/{}/messages/client/trip",
                     MQTT_CLIENT_ID
                 )
-                .unwrap();
+                .is_err() {
+                    error!("[WIFI] Failed to format trip topic string");
+                    continue; 
+                }
 
-                writeln!(&mut trip_str, "{trip_payload}").unwrap();
+                if writeln!(&mut trip_str, "{trip_payload}")
+                .is_err() {
+                    error!("[WIFI] Failed to format trip payload string");
+                    continue;
+                };
 
                 info!("[WIFI] MQTT payload (trip): {trip_str}");
 
@@ -184,31 +224,52 @@ pub async fn wifi_mqtt_handler(
                 }
                 info!("[WIFI] MQTT GPS sent OK");
             }
-
+            // Connection maintainance
             mqtt_client.poll().await;
             Timer::after_secs(1).await;
         }
     }
 }
 
+/// Performs DNS resolution to get the IP address of the MQTT broker
+/// 
+/// This function manually implements DNS resolution by:
+/// 1. Connecting to Google's DNS server (8.8.8.8)
+/// 2. Sending a DNS query for the broker hostname
+/// 3. Parsing the response to extract the IP address
+/// 4. Returning an endpoint with the resolved IP and MQTT port
 pub async fn dns_query(
     stack: &'static Stack<'static>,
 ) -> Result<embassy_net::IpEndpoint, ConnectError> {
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
     let mut socket = TcpSocket::new(*stack, &mut rx_buffer, &mut tx_buffer);
+
     socket.set_timeout(Some(embassy_time::Duration::from_secs(10)));
+
     let mut buffer = [0; 512];
     let dns_ip = Ipv4Address::new(8, 8, 8, 8);
     let remote_endpoint = embassy_net::IpEndpoint {
         addr: embassy_net::IpAddress::Ipv4(dns_ip),
         port: 53,
     };
+    // Connect to DNS server
     socket.connect(remote_endpoint).await?;
     let dns_builder = DnsBuilder::build(MQTT_SERVER_NAME);
-    socket.write(&dns_builder.query_data()).await.unwrap();
 
-    let size = socket.read(&mut buffer).await.unwrap();
+    if let Err(e) = socket.write(&dns_builder.query_data()).await {
+        error!("[DNS] Failed to write DNS query: {e:?}");
+        return Err(ConnectError::NoRoute);
+    }
+
+    let size = match socket.read(&mut buffer).await {
+        Ok(s) => s,
+        Err(e) => {
+            error!("[DNS] Failed to read DNS response: {e:?}");
+            return Err(ConnectError::NoRoute);
+        }
+    };
+
     let broker_ip = if size > 2 {
         if let Ok(ips) = DnsBuilder::parse_dns_response(&buffer[2..size]) {
             info!("broker IP: {}.{}.{}.{}", ips[0], ips[1], ips[2], ips[3]);
