@@ -46,7 +46,7 @@ use esp_hal::{
     twai::{self, TwaiMode},
     uart::{Config, Uart},
 };
-use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
+use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController, InitializationError};
 use log::{error, info};
 use modem::*;
 use static_cell::StaticCell;
@@ -69,25 +69,83 @@ const DVT_KEY: &[u8] = include_bytes!("../certs/dvt.key");
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
+    // Init logging system
     esp_println::logger::init_logger_from_env();
+
+    // Init peripherals
     let peripherals = esp_hal::init({
         let mut config = esp_hal::Config::default();
         config.cpu_clock = CpuClock::max();
         config
     });
     info!("Telematic started");
+
     esp_alloc::heap_allocator!(200 * 1024);
+
+    // Init timer groups for Embassy async runtime
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     esp_hal_embassy::init(timg1.timer0);
+    // Init True Random Number Generator
     let trng = &mut *mk_static!(Trng<'static>, Trng::new(peripherals.RNG, peripherals.ADC1));
+
+    // Init EspWifiController
     let init = &*mk_static!(
         EspWifiController<'static>,
-        init(timg0.timer0, trng.rng, peripherals.RADIO_CLK).unwrap()
+        match init(timg0.timer0, trng.rng, peripherals.RADIO_CLK) {
+            Ok(controller) => controller,
+            Err(e) => {
+                // Log specific error details based on the error type
+                match e {
+                    InitializationError::WrongClockConfig => {
+                        error!("Failed to initialize WiFi - WrongClockConfig");
+                    }
+                    InitializationError::WifiError(wifi_err) => {
+                        error!("Failed to initialize WiFi - WifiError: {wifi_err:?}");
+                    }
+                    InitializationError::General(code) => {
+                        error!("Failed to initialize WiFi - General: {code:?}");
+                    }
+                }
+
+                // Wifi is a critical component (could replace the panic! with the code to reset later)
+                panic!("WiFi initialization failure");
+            }
+        }
     );
+
+    // Create Wifi interface
     let wifi = peripherals.WIFI;
-    let (wifi_interface, controller) =
-        esp_wifi::wifi::new_with_mode(init, wifi, WifiStaDevice).unwrap();
+    let (wifi_interface, controller) = match esp_wifi::wifi::new_with_mode(
+        init,
+        wifi,
+        WifiStaDevice,
+    ) {
+        Ok(val) => val,
+        Err(e) => {
+            match e {
+                esp_wifi::wifi::WifiError::NotInitialized => {
+                    error!(" Wi-Fi module is not initialized or not initialized for `Wi-Fi` - NotInitialized");
+                }
+                esp_wifi::wifi::WifiError::InternalError(internal_err) => {
+                    error!("Internal Wi-Fi error: {internal_err:?}");
+                }
+                esp_wifi::wifi::WifiError::Disconnected => {
+                    error!("The device disconnected from the network or failed to connect to it - Disconnected");
+                }
+                esp_wifi::wifi::WifiError::UnknownWifiMode => {
+                    error!("Unknown Wi-Fi mode (not Sta/Ap/ApSta) - UnknowWifiMode");
+                }
+                esp_wifi::wifi::WifiError::Unsupported => {
+                    error!("Unsupported operation or mode - Unsupported");
+                }
+            }
+            // Could replace panic! with the code to reset process
+            panic!("Fail to create Wifi interface");
+        }
+    };
+
+    // Configure network stack for DHCP
     let config = embassy_net::Config::dhcpv4(Default::default());
     #[cfg(feature = "wdg")]
     let mut rtc = {
@@ -98,7 +156,7 @@ async fn main(spawner: Spawner) -> ! {
     };
 
     let seed = 1234;
-
+    // Create Embassy network stack with WiFi interface
     let (stack, runner) = embassy_net::new(
         wifi_interface,
         config,
@@ -116,8 +174,10 @@ async fn main(spawner: Spawner) -> ! {
     let dtr_pin = Output::new(peripherals.GPIO22, esp_hal::gpio::Level::High);
 
     let config = Config::default().with_rx_fifo_full_threshold(64);
+    // UART0 is a dedicated peripheral on the ESP32, always available for the modem.
+    // If initialization fails (e.g due to hardware issues, etc), the program cannot proceed and panicking should be acceptable,
     let uart0 = Uart::new(peripherals.UART0, config)
-        .unwrap()
+        .expect("Fail to initialize UART0")
         .with_rx(uart_rx_pin)
         .with_tx(uart_tx_pin)
         .into_async();
@@ -169,13 +229,15 @@ async fn main(spawner: Spawner) -> ! {
     let miso = peripherals.GPIO20;
     let mosi = peripherals.GPIO19;
     let cs = Output::new(peripherals.GPIO3, esp_hal::gpio::Level::High);
+    // SPI2 is a dedicated peripheral on the ESP32, always available for the modem.
+    // If initialization fails (e.g due to hardware issues, etc), the program cannot proceed and panicking should be acceptable,
     let spi = Spi::new(
         peripherals.SPI2,
         otherConfig::default()
             .with_frequency(10u32.MHz())
             .with_mode(Mode::_0),
     )
-    .unwrap()
+    .expect("Fail to initialize SPI2")
     .with_sck(sclk)
     .with_mosi(mosi)
     .with_miso(miso);
@@ -227,12 +289,12 @@ async fn main(spawner: Spawner) -> ! {
             peripherals.SHA,
             peripherals.RSA,
         ))
-        .unwrap();
+        .ok();
 
     // ====================================
     // === Spawn RX handler Quectel ===
     // ====================================
-    spawner.spawn(modem_rx_handler(ingress, uart_rx)).unwrap();
+    spawner.spawn(modem_rx_handler(ingress, uart_rx)).ok();
 
     // ====================================
     // === Quectel flow API driver ===
@@ -260,7 +322,7 @@ async fn main(spawner: Spawner) -> ! {
             certificate,
             private_key,
         ))
-        .unwrap();
+        .ok();
 
     spawner.spawn(net_manager_task(spawner)).ok();
     #[cfg(feature = "ota")]
