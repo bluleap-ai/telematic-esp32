@@ -342,7 +342,9 @@ impl Modem {
                         info!("[modem] Network registration checked successfully");
                         state = State::MqttOpenConnection;
                     } else {
-                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteUnregistered);
+                        if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteUnregistered) {
+                            error!("[modem] Failed to send LteUnregistered event: {e:?}");
+                        }
                         error!("[modem] LTE init failed at CheckNetworkRegistration");
                         return Err(ModemError::Command);
                     }
@@ -352,7 +354,9 @@ impl Modem {
                         info!("[modem] MQTT connection opened successfully");
                         state = State::MqttConnectBroker;
                     } else {
-                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
+                        if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected) {
+                            error!("[modem] Failed to send LteDisconnected event: {e:?}");
+                        }
                         error!("[modem] Failed to open MQTT connection");
                         return Err(ModemError::MqttConnection);
                     }
@@ -362,7 +366,9 @@ impl Modem {
                         info!("[modem] MQTT connected to broker successfully");
                         break;
                     } else {
-                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
+                        if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected) {
+                            error!("[modem] Failed to send LteDisconnected event: {e:?}");
+                        }
                         error!("[modem] Failed to connect to MQTT broker");
                         return Err(ModemError::MqttConnection);
                     }
@@ -374,7 +380,9 @@ impl Modem {
             }
             Timer::after(Duration::from_secs(1)).await;
         }
-        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected);
+        if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected) {
+            error!("[modem] Failed to send LteConnected event: {e:?}");
+        }
         Ok(())
     }
 
@@ -624,13 +632,18 @@ impl Modem {
                     return false;
                 }
             };
-            let _ = self
+            if let Err(e) = self
                 .client
                 .send(&FileDel {
                     name: name_str,
                 })
-                .await;
-            info!("Deleted old {name}");
+                .await
+            {
+                warn!("[modem] Failed to delete old file {name}: {e:?}");
+                // Continue anyway - file might not exist
+            } else {
+                info!("Deleted old {name}");
+            }
         }
 
         async fn upload_file(
@@ -695,7 +708,7 @@ impl Modem {
                 return false;
             }
         }; 
-        let _ = self
+        if let Err(e) = self
             .client
             .send(&MqttConfig {
                 name: recv_mode_name,
@@ -703,7 +716,11 @@ impl Modem {
                 param_2: Some(0),
                 param_3: Some(1),
             })
-            .await;
+            .await
+        {
+            error!("[modem] Failed to configure MQTT recv/mode: {e:?}");
+            return false;
+        }
 
         let ssl_name = match String::from_str("SSL") {
             Ok(s) => s,
@@ -712,7 +729,7 @@ impl Modem {
                 return false;
             }
         }; 
-        let _ = self
+        if let Err(e) = self
             .client
             .send(&MqttConfig {
                 name: ssl_name,
@@ -720,7 +737,11 @@ impl Modem {
                 param_2: Some(1),
                 param_3: Some(2),
             })
-            .await;
+            .await
+        {
+            error!("[modem] Failed to configure MQTT SSL: {e:?}");
+            return false;
+        }
 
         for (cfg_name, path) in [
             ("cacert", "UFS:ca.crt"),
@@ -743,14 +764,18 @@ impl Modem {
                 }
             };
 
-            let _ = self
+            if let Err(e) = self
                 .client
                 .send(&SslConfigCert {
                     name: config_name,
                     context_id: 2,
                     cert_path: Some(cert_path),
                 })
-                .await;
+                .await
+            {
+                error!("[modem] Failed to configure SSL cert {cfg_name}: {e:?}");
+                return false;
+            }
         }
         let name_seclevel = match String::from_str("seclevel") {
             Ok(s) => s,
@@ -760,14 +785,18 @@ impl Modem {
             }
         };
 
-        let _ = self
+        if let Err(e) = self
             .client
             .send(&SslConfigOther {
                 name: name_seclevel,
                 context_id: 2,
                 level: 2,
             })
-            .await;
+            .await
+        {
+            error!("[modem] Failed to configure SSL security level: {e:?}");
+            return false;
+        }
 
         let sslversion_name = match String::from_str("sslversion") {
             Ok(s) => s,
@@ -776,15 +805,22 @@ impl Modem {
                 return false;
             }
         };
-        let _ = self
+        if let Err(e) = self
             .client
             .send(&SslConfigOther {
                 name: sslversion_name,
                 context_id: 2,
                 level: 4,
             })
-            .await;
-        let _ = self.client.send(&SslSetCipherSuite).await;
+            .await
+        {
+            error!("[modem] Failed to configure SSL version: {e:?}");
+            return false;
+        }
+        if let Err(e) = self.client.send(&SslSetCipherSuite).await {
+            error!("[modem] Failed to set SSL cipher suite: {e:?}");
+            return false;
+        }
 
         let ignorelocaltime_name = match String::from_str("ignorelocaltime") {
             Ok(s) => s,
@@ -793,14 +829,18 @@ impl Modem {
                 return false;
             }
         };
-        let _ = self
+        if let Err(e) = self
             .client
             .send(&SslConfigOther {
                 name: ignorelocaltime_name,
                 context_id: 2,
                 level: 1,
             })
-            .await;
+            .await
+        {
+            error!("[modem] Failed to configure SSL ignore local time: {e:?}");
+            return false;
+        }
 
         let version_name = match String::from_str("version") {
             Ok(s) => s,
@@ -809,7 +849,7 @@ impl Modem {
                 return false;
             }
         };
-        let _ = self
+        if let Err(e) = self
             .client
             .send(&MqttConfig {
                 name: version_name,
@@ -817,7 +857,11 @@ impl Modem {
                 param_2: Some(4),
                 param_3: None,
             })
-            .await;
+            .await
+        {
+            error!("[modem] Failed to configure MQTT version: {e:?}");
+            return false;
+        }
 
         true
     }
