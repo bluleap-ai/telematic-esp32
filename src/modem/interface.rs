@@ -816,13 +816,9 @@ impl Modem {
     #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
     pub async fn mqtt_open_connection(&mut self) -> Result<(), ModemError> {
         info!("[modem] Closing MQTT connection");
-        self.client
-            .send(&MqttClose { tcp_connect_id: 0 })
-            .await
-            .map_err(|e| {
-                error!("[modem] Failed to open MQTT connection: {e:?}");
-                ModemError::MqttConnection
-            })?;
+        if let Err(e) = self.client.send(&MqttClose { tcp_connect_id: 0 }).await {
+            warn!("[modem] No MQTT connection to close: {:?}", e);
+        }
         info!("[modem] Opening MQTT connection");
         self.open_mqtt_connection_internal().await.map_err(|e| {
             error!("[modem] Failed to open MQTT connection: {e:?}");
@@ -1035,7 +1031,7 @@ impl Modem {
                 } else {
                     info!("[LTE] GPS data sent to channel: {trip_data:?}");
                 }
-
+                // Ok(()) // for testing
                 // Serialize to JSON
                 if let Ok(len) = serde_json_core::to_slice(&trip_data, &mut buf) {
                     let json = core::str::from_utf8(&buf[..len])
