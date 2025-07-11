@@ -594,8 +594,18 @@ impl Modem {
     ) -> bool {
         let mut raw_data = heapless::Vec::<u8, 4096>::new();
         raw_data.clear();
-        let mut subscriber = self.urc_channel.subscribe().unwrap();
-        let _ = self.client.send(&FileList).await.unwrap();
+        let mut subscriber = match self.urc_channel.subscribe() {
+            Ok(sub) => sub,
+            Err(e) => {
+                error!("[modem] Failed to subscribe to URC channel: {e:?}");
+                return false;
+            }
+        };
+        if let Err(e) = self.client.send(&FileList).await {
+            error!("[modem] Failed to send FileList command: {e:?}");
+            return false;
+        }
+
         let now = Instant::now();
         while now.elapsed().as_secs() < 10 {
             Timer::after(Duration::from_secs(1)).await;
@@ -607,10 +617,17 @@ impl Modem {
         }
 
         for name in ["crt.pem", "dvt.crt", "dvt.key"] {
+            let name_str = match String::from_str(name) {
+                Ok(s) => s,
+                Err(_) => {
+                    error!("[modem] Failed to create string for file name: {name}");
+                    return false;
+                }
+            };
             let _ = self
                 .client
                 .send(&FileDel {
-                    name: String::from_str(name).unwrap(),
+                    name: name_str,
                 })
                 .await;
             info!("Deleted old {name}");
@@ -671,19 +688,34 @@ impl Modem {
         }
 
         info!("Configuring MQTT over TLS...");
+        let recv_mode_name = match String::from_str("recv/mode") {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[modem] Failed to create string for recv/mode config");
+                return false;
+            }
+        }; 
         let _ = self
             .client
             .send(&MqttConfig {
-                name: String::from_str("recv/mode").unwrap(),
+                name: recv_mode_name,
                 param_1: Some(0),
                 param_2: Some(0),
                 param_3: Some(1),
             })
             .await;
+
+        let ssl_name = match String::from_str("SSL") {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[modem] Failed to create string for SSL config");
+                return false;
+            }
+        }; 
         let _ = self
             .client
             .send(&MqttConfig {
-                name: String::from_str("SSL").unwrap(),
+                name: ssl_name,
                 param_1: Some(0),
                 param_2: Some(1),
                 param_3: Some(2),
@@ -695,45 +727,92 @@ impl Modem {
             ("clientcert", "UFS:dvt.crt"),
             ("clientkey", "UFS:dvt.key"),
         ] {
+            let config_name = match String::from_str(cfg_name) {
+                Ok(s) => s,
+                Err(_) => {
+                    error!("[modem] Failed to create string for config name: {cfg_name}");
+                    return false;
+                }
+            };
+
+            let cert_path = match String::from_str(path) {
+                Ok(s) => s,
+                Err(_) => {
+                    error!("[modem] Failed to create string for cert path: {path}");
+                    return false;
+                }
+            };
+
             let _ = self
                 .client
                 .send(&SslConfigCert {
-                    name: String::from_str(cfg_name).unwrap(),
+                    name: config_name,
                     context_id: 2,
-                    cert_path: Some(String::from_str(path).unwrap()),
+                    cert_path: Some(cert_path),
                 })
                 .await;
         }
+        let name_seclevel = match String::from_str("seclevel") {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[modem] Failed to create string for seclevel config");
+                return false;
+            }
+        };
 
         let _ = self
             .client
             .send(&SslConfigOther {
-                name: String::from_str("seclevel").unwrap(),
+                name: name_seclevel,
                 context_id: 2,
                 level: 2,
             })
             .await;
+
+        let sslversion_name = match String::from_str("sslversion") {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[modem] Failed to create string for sslversion config");
+                return false;
+            }
+        };
         let _ = self
             .client
             .send(&SslConfigOther {
-                name: String::from_str("sslversion").unwrap(),
+                name: sslversion_name,
                 context_id: 2,
                 level: 4,
             })
             .await;
         let _ = self.client.send(&SslSetCipherSuite).await;
+
+        let ignorelocaltime_name = match String::from_str("ignorelocaltime") {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[modem] Failed to create string for ignorelocaltime config");
+                return false;
+            }
+        };
         let _ = self
             .client
             .send(&SslConfigOther {
-                name: String::from_str("ignorelocaltime").unwrap(),
+                name: ignorelocaltime_name,
                 context_id: 2,
                 level: 1,
             })
             .await;
+
+        let version_name = match String::from_str("version") {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[modem] Failed to create string for version config");
+                return false;
+            }
+        };
         let _ = self
             .client
             .send(&MqttConfig {
-                name: String::from_str("version").unwrap(),
+                name: version_name,
                 param_1: Some(0),
                 param_2: Some(4),
                 param_3: None,
@@ -754,6 +833,7 @@ impl Modem {
             Ok(())
         } else {
             Err(ModemError::MqttPublish)
+            // Should be Err(ModemError::NetworkRegistration)
         }
     }
 
@@ -1004,8 +1084,15 @@ impl Modem {
                 let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
                 let mut device_id = heapless::String::new();
                 let mut trip_id = heapless::String::new();
-                write!(&mut trip_id, "{mqtt_client_id}").unwrap();
-                write!(&mut device_id, "{mqtt_client_id}").unwrap();
+
+                if write!(&mut trip_id, "{mqtt_client_id}").is_err() {
+                    error!("[LTE] Failed to write trip_id string");
+                    return Err(ModemError::Command);
+                }
+                if write!(&mut device_id, "{mqtt_client_id}").is_err() {
+                    error!("[LTE] Failed to write cliend_id string");
+                    return Err(ModemError::Command);
+                };
 
                 let trip_data = TripData {
                     device_id,

@@ -13,6 +13,6 @@
   "[jsonc]": {
     "editor.defaultFormatter": "vscode.json-language-features"
   },
-  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.check.command": "check",
   "rust-analyzer.checkOnSave": true,
 }
