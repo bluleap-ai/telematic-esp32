@@ -132,6 +132,8 @@ pub async fn lte_mqtt_handler_fsm(
                         state = LteState::GetGps;
                     }
                     Err(e) => {
+                        // This error is misleading ? Since we are in the HealthCheck state
+                        // Should be error!("[LTE] HealthCheck failed: {e:?}");
                         error!("[LTE] InitMqttLte failed: {e:?}");
                         state = LteState::Error(e);
                     }
@@ -141,7 +143,7 @@ pub async fn lte_mqtt_handler_fsm(
                 embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
                 match modem.init_mqtt_over_lte().await {
                     Ok(()) => {
-                        info!("[LTE] M successful");
+                        info!("[LTE] InitMqttLte successful");
                         let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected);
                         state = LteState::Operational;
                     }

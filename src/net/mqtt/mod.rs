@@ -112,7 +112,13 @@ impl<'a> MqttClient<'a> {
 
     async fn send(&mut self, packet: Packet<'_>) -> Result<(), MqttError> {
         let mut buffer = [0u8; 4096];
-        let len = encode_slice(&packet, &mut buffer).unwrap();
+        let len = match encode_slice(&packet, &mut buffer) {
+            Ok(len) => len,
+            Err(e) => {
+                error!("Failed to encode MQTT packet: {e:?}");
+                return Err(MqttError::Overflow);
+            }
+        };
         match self.session.write(&buffer[..len]).await {
             Ok(_) => Ok(()),
             Err(e) => {
