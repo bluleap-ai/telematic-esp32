@@ -70,7 +70,7 @@ const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 /// 4. Broadcasts connection status to other system components
 /// 5. Handles manual connection switch requests
 ///
-/// Wifi is preffered when available, LTE serves as fall back methods
+/// Wifi is prefered when available, LTE serves as fall back methods
 /// 
 #[embassy_executor::task]
 pub async fn net_manager_task(spawner: Spawner) -> ! {
@@ -87,7 +87,9 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
 
     // Start health monitoring tasks
     let health_sender = CONN_EVENT_CHAN.sender();
-    spawner.spawn(net_health_monitor(health_sender)).ok();
+    if let Err(e) = spawner.spawn(net_health_monitor(health_sender)) {
+         warn!("[NetMgr] Failed to spawn LTE health monitor task: {e:?}");
+    };
 
     loop {
         let event_fut = event_receiver.receive();
@@ -111,8 +113,12 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
                         if !is_lte_available(&status)
                             && (esp_wifi::wifi::wifi_state() != WifiState::StaConnected)
                         {
+                            // Clear old health check monitor request
                             while !CHECK_LTE_HEALTH_CHAN.is_empty() {
-                                let _ = CHECK_LTE_HEALTH_CHAN.receiver().try_receive();
+                                match CHECK_LTE_HEALTH_CHAN.receiver().try_receive() {
+                                    Ok(_) => info!("[NetMgr] Cleared old health check request"),
+                                    Err(e) => warn!("[NetMgr] Failed to clear LTE health check request: {e:?}")
+                                };
                             }
                             match CHECK_LTE_HEALTH_CHAN.try_send(true) {
                                 Ok(_) => info!("[NetMgr] Sent LTE health check request"),
@@ -161,18 +167,33 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
                 }
 
                 // Notify others of status change
-                let _ = status_sender.try_send(status);
-                let _ = active_net_sender.try_send(status.active);
+                match status_sender.try_send(status) {
+                    Ok(_) => info!("[NetMgr] Status update sent sucessfully"),
+                    Err(e) => warn!("[NetMgr] Failed to send status update {e:?}")
+                };
+                match active_net_sender.try_send(status.active) {
+                    Ok(_) => info!("[NetMgr] Active connection update sent to NET"),
+                    Err(e) => warn!("[NetMgr] Failed to send active connection update {e:?}")
+                };
                 info!("[NetMgr] Notify {:?}", status.active);
                 info!(
                     "[NetMgr] Current size of ACTIVE_CONNECTION_CHAN_LTE: {}",
                     ACTIVE_CONNECTION_CHAN_LTE.len()
                 );
+                
+                // Clear old LTE connection status
                 while !ACTIVE_CONNECTION_CHAN_LTE.is_empty() {
-                    let _ = ACTIVE_CONNECTION_CHAN_LTE.receiver().try_receive();
+                    match ACTIVE_CONNECTION_CHAN_LTE.receiver().try_receive() {
+                        Ok(_) => info!("[NetMgr] Cleared old LTE connection status"),
+                        Err(e) => warn!("[NetMgr] Failed to clear LTE connection status: {e:?}") 
+                    };
                 }
-
-                let _ = active_lte_sender.try_send(status.active); // Added for LTE
+                
+                // Added for LTE
+                match active_lte_sender.try_send(status.active) {
+                    Ok(_) => info!("[NetMgr] Active connection update sent to LTE"),
+                    Err(e) => warn!("[NetMgr] Failed to send active connection update to LTE {e:?}") 
+                }; 
                 info!(
                     "[NetMgr] Current size of ACTIVE_CONNECTION_CHAN_LTE: {}",
                     ACTIVE_CONNECTION_CHAN_LTE.len()
@@ -188,10 +209,20 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
         if let Ok(requested_connection) = switch_receiver.try_receive() {
             if can_switch_to(&status, requested_connection) {
                 perform_net_switch(&mut status, requested_connection).await;
-                let _ = status_sender.try_send(status);
-                let _ = active_net_sender.try_send(status.active);
+                match status_sender.try_send(status) {
+                    Ok(_) => info!("[NetMgr] Manual switch status update sent successfully"),
+                    Err(e) => warn!("[NetMgr] Failed to send manual switch status update: {e:?}")
+                }
+                match active_net_sender.try_send(status.active) {
+                    Ok(_) => info!("[NetMgr] Manual switch active connection sent to NET"),
+                    Err(e) => warn!("[NetMgr] Failed to send manual switch active connection to NET: {e:?}")
+                }
                 info!("[NetMgr] Notify is have bug here? {:?}", status.active);
-                let _ = active_lte_sender.try_send(status.active); // Added for LTE
+                // Added for LTE
+                match active_lte_sender.try_send(status.active) {
+                    Ok(_) => info!("[NetMgr] Manual switch active connection sent to LTE"),
+                    Err(e) => warn!("[NetMgr] Failed to send manual switch active connection to LTE:: {e:?}")
+                }; 
             } else {
                 warn!("[NetMgr] Cannot switch to {requested_connection:?} - not available");
             }
