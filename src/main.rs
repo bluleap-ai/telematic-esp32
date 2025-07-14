@@ -277,7 +277,10 @@ async fn main(spawner: Spawner) -> ! {
     ];
     let mut fs = FlashController::new(&mut flash);
 
-    fs.print_directory(FlashRegion::Certstore).await;
+    match fs.print_directory(FlashRegion::Certstore).await {
+        Ok(_) => info!("[MAIN] Flash controller print successfully"),
+        Err(e) => error!("[MAIN] Flash controller failed to print {e:?}")
+    };
     spawner.spawn(can_receiver(can_rx, can_channel)).ok();
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(runner)).ok();

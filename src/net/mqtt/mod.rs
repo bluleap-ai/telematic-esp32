@@ -65,7 +65,10 @@ impl<'a> MqttClient<'a> {
     }
 
     pub async fn disconnect(&mut self) {
-        let _ = self.session.close().await;
+        match self.session.close().await {
+            Ok(_) => info!("[MQTT] Session closed successfully"),
+            Err(e) => error!("[MQTT] Failed to close session: {e:?}"),
+        }
         self.connection_state = false;
     }
 

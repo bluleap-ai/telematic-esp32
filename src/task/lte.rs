@@ -144,12 +144,18 @@ pub async fn lte_mqtt_handler_fsm(
                 match modem.init_mqtt_over_lte().await {
                     Ok(()) => {
                         info!("[LTE] InitMqttLte successful");
-                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected);
+                        match CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected) {
+                            Ok(_) => info!("[LTE] LTE connected event sent successfully"),
+                            Err(e) => error!("[LTE] Failed to send LTE connected event: {e:?}"),
+                        };
                         state = LteState::Operational;
                     }
                     Err(e) => {
                         error!("[LTE] InitMqttLte failed: {e:?}");
-                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
+                        match CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected) {
+                            Ok(_) => info!("[LTE] LTE disconnected event sent successfully"),
+                            Err(e) => error!("[LTE] Failed to send LTE disconnected event: {e:?}"),
+                        };
                         state = LteState::Error(e);
                     }
                 }
@@ -179,10 +185,14 @@ pub async fn lte_mqtt_handler_fsm(
                     //     data: [0, 1, 2, 3, 4, 5, 6, 7],
                     // };
 
-                    let _ = core::fmt::write(
+                    if let Err(e) = core::fmt::write(
                         &mut can_topic,
                         format_args!("channels/{mqtt_client_id}/messages/client/can"),
-                    );
+                    ) {
+                        error!("[LTE] Failed to format CAN topic: {e:?}");
+                        state = LteState::Error(ModemError::Command);
+                        continue;
+                    }
 
                     if let Ok(len) = serde_json_core::to_slice(&can_data, &mut buf) {
                         let json = core::str::from_utf8(&buf[..len])
@@ -229,10 +239,14 @@ pub async fn lte_mqtt_handler_fsm(
                     let mut buf: [u8; 1024] = [0u8; 1024];
                     let mut trip_topic: heapless::String<128> = heapless::String::new();
 
-                    let _ = core::fmt::write(
+                    if let Err(e) = core::fmt::write(
                         &mut trip_topic,
                         format_args!("channels/{mqtt_client_id}/messages/client/trip"),
-                    );
+                    ) {
+                        error!("[LTE] Failed to format trip topic: {e:?}");
+                        state = LteState::Error(ModemError::Command);
+                        continue;
+                    }
 
                     if let Ok(len) = serde_json_core::to_slice(&trip_data, &mut buf) {
                         let json = core::str::from_utf8(&buf[..len])
