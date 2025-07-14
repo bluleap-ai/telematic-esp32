@@ -9,6 +9,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
+use esp_wifi::wifi::WifiState;
 use log::{error, info, warn};
 #[allow(dead_code)] // Suppress unused struct warning
 pub struct Lte {
@@ -44,24 +45,49 @@ pub async fn lte_mqtt_handler_fsm(
     private_key: &'static [u8],
 ) -> ! {
     let mut state = LteState::Off;
+    let mut retry_count = 0;
+    const MAX_RETRIES: u8 = 3;
 
     loop {
         match state {
             LteState::Off => {
-                info!("[LTE] State: Off - Initializing modem");
+                if retry_count > 0 {
+                    info!(
+                        "[LTE] State: Off - Initializing modem (Attempt {}/{})",
+                        retry_count + 1,
+                        MAX_RETRIES
+                    );
+                }
                 match modem.modem_init().await {
                     Ok(()) => {
                         info!("[LTE] Modem initialized successfully");
                         state = LteState::Lte;
+                        retry_count = 0; // Reset retry count on success
                     }
                     Err(e) => {
-                        error!("[LTE] Modem initialization failed: {e:?}");
-                        state = LteState::Error(e);
+                        retry_count += 1;
+                        error!(
+                            "[LTE] Modem initialization failed: {e:?} (Attempt {}/{})",
+                            retry_count, MAX_RETRIES
+                        );
+                        if retry_count >= MAX_RETRIES {
+                            state = LteState::Error(e);
+                            retry_count = 0; // Reset retry count for error state
+                        } else {
+                            Timer::after(Duration::from_secs(1)).await; // Wait before retrying
+                        }
                     }
                 }
             }
             LteState::Lte => {
-                info!("[LTE] State: Lte - Initializing LTE");
+                embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+                if retry_count > 0 {
+                    info!(
+                        "[LTE] State: Lte - Initializing LTE (Attempt {}/{})",
+                        retry_count + 1,
+                        MAX_RETRIES
+                    );
+                }
                 match modem
                     .lte_init(mqtt_client_id, ca_chain, certificate, private_key)
                     .await
@@ -69,34 +95,72 @@ pub async fn lte_mqtt_handler_fsm(
                     Ok(()) => {
                         info!("[LTE] LTE initialized successfully");
                         state = LteState::Gps;
+                        retry_count = 0; // Reset retry count on success
                     }
                     Err(e) => {
-                        error!("[LTE] LTE initialization failed: {e:?}");
-                        state = LteState::Error(e);
+                        retry_count += 1;
+                        error!(
+                            "[LTE] LTE initialization failed: {e:?} (Attempt {}/{})",
+                            retry_count, MAX_RETRIES
+                        );
+                        if retry_count >= MAX_RETRIES {
+                            if esp_wifi::wifi::wifi_state() == WifiState::StaConnected {
+                                state = LteState::Gps;
+                                retry_count = 0; // Reset retry count for error state
+                            } else {
+                                state = LteState::Error(e);
+                                retry_count = 0; // Reset retry count for error state
+                            }
+                        } else {
+                            Timer::after(Duration::from_secs(1)).await; // Wait before retrying
+                        }
                     }
                 }
             }
             LteState::Gps => {
                 embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
-                info!("[LTE] State: Gps - Initializing GPS");
+                if retry_count > 0 {
+                    info!(
+                        "[LTE] State: Gps - Initializing GPS (Attempt {}/{})",
+                        retry_count + 1,
+                        MAX_RETRIES
+                    );
+                }
                 match modem.gps_init().await {
                     Ok(()) => {
                         info!("[LTE] GPS initialized successfully");
                         state = LteState::GetGps;
+                        retry_count = 0; // Reset retry count on success
                     }
                     Err(e) => {
-                        error!("[LTE] GPS initialization failed: {e:?}");
-                        state = LteState::Error(e);
+                        retry_count += 1;
+                        error!(
+                            "[LTE] GPS initialization failed: {e:?} (Attempt {}/{})",
+                            retry_count, MAX_RETRIES
+                        );
+                        if retry_count >= MAX_RETRIES {
+                            state = LteState::Error(e);
+                            retry_count = 0; // Reset retry count for error state
+                        } else {
+                            Timer::after(Duration::from_secs(1)).await; // Wait before retrying
+                        }
                     }
                 }
             }
             LteState::GetGps => {
-                info!("[LTE] State: GetGps - Retrieving GPS data");
+                if retry_count > 0 {
+                    info!(
+                        "[LTE] State: GetGps - Retrieving GPS data (Attempt {}/{})",
+                        retry_count + 1,
+                        MAX_RETRIES
+                    );
+                }
                 match modem.get_gps(mqtt_client_id, gps_channel).await {
                     Ok(()) => {
                         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+                        retry_count = 0; // Reset retry count on success
                         if let Ok(true) = CHECK_LTE_HEALTH_CHAN.try_receive() {
-                            info!("[LTE] get health check from Getgps");
+                            info!("[LTE] get health check from GetGps");
                             state = LteState::HealthCheck;
                         } else {
                             // Check IS_LTE condition
@@ -118,44 +182,91 @@ pub async fn lte_mqtt_handler_fsm(
                         }
                     }
                     Err(e) => {
-                        error!("[LTE] GPS initialization failed: {e:?}");
-                        state = LteState::Error(e);
+                        retry_count += 1;
+                        error!(
+                            "[LTE] GPS data retrieval failed: {e:?} (Attempt {}/{})",
+                            retry_count, MAX_RETRIES
+                        );
+                        if retry_count >= MAX_RETRIES {
+                            state = LteState::Error(e);
+                            retry_count = 0; // Reset retry count for error state
+                        } else {
+                            Timer::after(Duration::from_secs(1)).await; // Wait before retrying
+                        }
                     }
                 }
             }
             LteState::HealthCheck => {
                 embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
-                info!("[LTE]health check state");
+                if retry_count > 0 {
+                    info!(
+                        "[LTE] State: HealthCheck (Attempt {}/{})",
+                        retry_count + 1,
+                        MAX_RETRIES
+                    );
+                }
                 match modem.health_check_lte().await {
                     Ok(()) => {
                         info!("[LTE] HealthCheck successful");
                         state = LteState::GetGps;
+                        retry_count = 0; // Reset retry count on success
                     }
                     Err(e) => {
-                        error!("[LTE] InitMqttLte failed: {e:?}");
-                        state = LteState::Error(e);
+                        retry_count += 1;
+                        error!(
+                            "[LTE] HealthCheck failed: {e:?} (Attempt {}/{})",
+                            retry_count, MAX_RETRIES
+                        );
+                        if retry_count >= MAX_RETRIES {
+                            state = LteState::Error(e);
+                            retry_count = 0; // Reset retry count for error state
+                        } else {
+                            Timer::after(Duration::from_secs(1)).await; // Wait before retrying
+                        }
                     }
                 }
             }
             LteState::InitMqttLte => {
                 embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
+                if retry_count > 0 {
+                    info!(
+                        "[LTE] State: InitMqttLte (Attempt {}/{})",
+                        retry_count + 1,
+                        MAX_RETRIES
+                    );
+                }
                 match modem.init_mqtt_over_lte().await {
                     Ok(()) => {
-                        info!("[LTE] M successful");
+                        info!("[LTE] MQTT successful");
                         let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected);
                         state = LteState::Operational;
+                        retry_count = 0; // Reset retry count on success
                     }
                     Err(e) => {
-                        error!("[LTE] InitMqttLte failed: {e:?}");
+                        retry_count += 1;
+                        error!(
+                            "[LTE] InitMqttLte failed: {e:?} (Attempt {}/{})",
+                            retry_count, MAX_RETRIES
+                        );
                         let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
-                        state = LteState::Error(e);
+                        if retry_count >= MAX_RETRIES {
+                            state = LteState::Error(e);
+                            retry_count = 0; // Reset retry count for error state
+                        } else {
+                            Timer::after(Duration::from_secs(1)).await; // Wait before retrying
+                        }
                     }
                 }
             }
-
             LteState::Operational => {
                 embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
-                info!("[LTE] State: Operational - Performing LTE tasks (MQTT)");
+                if retry_count > 0 {
+                    info!(
+                        "[LTE] State: Operational - Performing LTE tasks (MQTT) (Attempt {}/{})",
+                        retry_count + 1,
+                        MAX_RETRIES
+                    );
+                }
 
                 // Handle CAN data
                 if let Ok(frame) = can_channel.try_receive() {
@@ -169,7 +280,6 @@ pub async fn lte_mqtt_handler_fsm(
                         len: frame.len,
                         data: frame.data,
                     };
-
                     // for testing
                     // let can_data = CanFrame {
                     //     id: 0,
@@ -188,8 +298,15 @@ pub async fn lte_mqtt_handler_fsm(
                             .replace('\"', "'");
 
                         if can_payload.push_str(&json).is_err() {
-                            error!("[LTE] Payload buffer overflow");
-                            state = LteState::Error(ModemError::Command);
+                            retry_count += 1;
+                            error!(
+                                "[LTE] Payload buffer overflow (Attempt {}/{})",
+                                retry_count, MAX_RETRIES
+                            );
+                            if retry_count >= MAX_RETRIES {
+                                state = LteState::Error(ModemError::Command);
+                                retry_count = 0; // Reset retry count for error state
+                            }
                             continue;
                         } else {
                             info!("[LTE] MQTT payload (CAN): {can_payload}");
@@ -206,16 +323,34 @@ pub async fn lte_mqtt_handler_fsm(
                                     })
                                     .await,
                             ) {
-                                warn!("[LTE] CAN data published successfully");
+                                info!("[LTE] CAN data published successfully");
+                                info!("[LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE]");
+                                info!("                                                SUCCESS");
+                                info!("[LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE]");
+                                retry_count = 0; // Reset retry count on success
                             } else {
-                                error!("[LTE] Failed to publish CAN data");
-                                state = LteState::Error(ModemError::MqttPublish);
+                                retry_count += 1;
+                                error!(
+                                    "[LTE] Failed to publish CAN data (Attempt {}/{})",
+                                    retry_count, MAX_RETRIES
+                                );
+                                if retry_count >= MAX_RETRIES {
+                                    state = LteState::Error(ModemError::MqttPublish);
+                                    retry_count = 0; // Reset retry count for error state
+                                }
                                 continue;
                             }
                         }
                     } else {
-                        error!("[LTE] Failed to serialize CAN data");
-                        state = LteState::Error(ModemError::Command);
+                        retry_count += 1;
+                        error!(
+                            "[LTE] Failed to serialize CAN data (Attempt {}/{})",
+                            retry_count, MAX_RETRIES
+                        );
+                        if retry_count >= MAX_RETRIES {
+                            state = LteState::Error(ModemError::Command);
+                            retry_count = 0; // Reset retry count for error state
+                        }
                         continue;
                     }
                 }
@@ -238,9 +373,15 @@ pub async fn lte_mqtt_handler_fsm(
                             .replace('\"', "'");
 
                         if trip_payload.push_str(&json).is_err() {
-                            error!("[LTE] Payload buffer overflow");
-                            // last_error = Some(ModemError::Command);
-                            state = LteState::Error(ModemError::Command);
+                            retry_count += 1;
+                            error!(
+                                "[LTE] Payload buffer overflow (Attempt {}/{})",
+                                retry_count, MAX_RETRIES
+                            );
+                            if retry_count >= MAX_RETRIES {
+                                state = LteState::Error(ModemError::Command);
+                                retry_count = 0; // Reset retry count for error state
+                            }
                             continue;
                         } else {
                             info!("[LTE] MQTT payload (GPS/trip): {trip_payload}");
@@ -252,27 +393,46 @@ pub async fn lte_mqtt_handler_fsm(
                                         msg_id: 0,
                                         qos: 0,
                                         retain: 0,
-                                        topic: trip_topic,
-                                        payload: trip_payload,
+                                        topic: trip_topic.clone(),
+                                        payload: trip_payload.clone(),
                                     })
                                     .await,
                             ) {
                                 info!("[LTE] Trip data published successfully");
+                                info!("[LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE]");
+                                info!("                                                SUCCESS");
+                                info!("[LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE][LTE]");
+                                retry_count = 0; // Reset retry count on success
                             } else {
-                                error!("[LTE] Failed to publish trip data");
-                                state = LteState::Error(ModemError::MqttPublish);
+                                retry_count += 1;
+                                error!(
+                                    "[LTE] Failed to publish trip data (Attempt {}/{})",
+                                    retry_count, MAX_RETRIES
+                                );
+                                if retry_count >= MAX_RETRIES {
+                                    state = LteState::Error(ModemError::MqttPublish);
+                                    retry_count = 0; // Reset retry count for error state
+                                }
                                 continue;
                             }
                         }
                     } else {
-                        error!("[LTE] Failed to serialize trip/GPS data");
-                        state = LteState::Error(ModemError::Command);
+                        retry_count += 1;
+                        error!(
+                            "[LTE] Failed to serialize trip/GPS data (Attempt {}/{})",
+                            retry_count, MAX_RETRIES
+                        );
+                        if retry_count >= MAX_RETRIES {
+                            state = LteState::Error(ModemError::Command);
+                            retry_count = 0; // Reset retry count for error state
+                        }
                         continue;
                     }
                 }
 
                 // Return to GetGps after processing
                 state = LteState::GetGps;
+                retry_count = 0; // Reset retry count when transitioning
                 Timer::after(Duration::from_secs(1)).await;
             }
             LteState::Error(error) => {
@@ -285,10 +445,10 @@ pub async fn lte_mqtt_handler_fsm(
                         state = LteState::Off; // Retry modem initialization
                     }
                     ModemError::MqttConnection | ModemError::MqttPublish => {
-                        state = LteState::Lte; // Retry LTE initialization
+                        state = LteState::GetGps; // Retry LTE initialization
                     }
                 }
-
+                retry_count = 0; // Reset retry count for new state
                 Timer::after(Duration::from_secs(5)).await; // Wait before retrying
             }
         }

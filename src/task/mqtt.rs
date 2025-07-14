@@ -33,22 +33,9 @@ pub async fn wifi_mqtt_handler(
     mut sha: SHA,
     mut rsa: RSA,
 ) -> ! {
+    info!("[WIFI] MQTT task");
+    let tls = Tls::new(&mut sha).unwrap().with_hardware_rsa(&mut rsa);
     loop {
-        if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_NET.receiver().try_receive() {
-            IS_WIFI.store(
-                active_connection == ActiveConnection::WiFi,
-                Ordering::SeqCst,
-            );
-            info!("[MQTT] Updated IS_WIFI: {}", IS_WIFI.load(Ordering::SeqCst));
-        }
-
-        // Check if WiFi is active, wait if not
-        if !IS_WIFI.load(Ordering::SeqCst) {
-            Timer::after(Duration::from_millis(500)).await;
-            continue;
-        }
-
-        info!("[WIFI] Using WIFI connection");
         // Ensure the stack is connected
         if !stack.is_link_up() {
             Timer::after(Duration::from_millis(500)).await;
@@ -84,7 +71,6 @@ pub async fn wifi_mqtt_handler(
             password: None,
         };
 
-        let tls = Tls::new(&mut sha).unwrap().with_hardware_rsa(&mut rsa);
         let session = match Session::new(
             socket,
             Mode::Client {
@@ -117,6 +103,21 @@ pub async fn wifi_mqtt_handler(
 
         info!("[MQTT] Connected to broker");
         loop {
+            if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_NET.receiver().try_receive() {
+                IS_WIFI.store(
+                    active_connection == ActiveConnection::WiFi,
+                    Ordering::SeqCst,
+                );
+                info!("[MQTT] Updated IS_WIFI: {}", IS_WIFI.load(Ordering::SeqCst));
+            }
+
+            // Check if WiFi is active, wait if not
+            if !IS_WIFI.load(Ordering::SeqCst) {
+                Timer::after(Duration::from_millis(500)).await;
+                continue;
+            }
+            info!("[WIFI] Using WIFI connection");
+
             if let Ok(frame) = can_channel.try_receive() {
                 let mut frame_str: heapless::String<80> = heapless::String::new();
                 let mut can_topic: heapless::String<80> = heapless::String::new();
@@ -140,9 +141,13 @@ pub async fn wifi_mqtt_handler(
                     .await
                 {
                     error!("[WIFI] Failed to publish MQTT packet: {e:?}");
-                    break;
+                    mqtt_client.disconnect().await;
+                    // continue;
                 }
                 info!("[WIFI] MQTT CAN sent OK {frame_str}");
+                info!("[WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI]");
+                info!("                                                SUCCESS");
+                info!("[WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI]");
             }
 
             if let Ok(trip_data) = gps_channel.try_receive() {
@@ -180,9 +185,14 @@ pub async fn wifi_mqtt_handler(
                     .await
                 {
                     error!("[WIFI] Failed to publish MQTT packet: {e:?}");
+                    mqtt_client.disconnect().await;
+                    // continue;
                     break;
                 }
                 info!("[WIFI] MQTT GPS sent OK");
+                info!("[WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI]");
+                info!("                                                SUCCESS");
+                info!("[WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI][WIFI]");
             }
 
             mqtt_client.poll().await;

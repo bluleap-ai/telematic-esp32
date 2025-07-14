@@ -145,6 +145,9 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
 
                 // Notify others of status change
                 let _ = status_sender.try_send(status);
+                while !ACTIVE_CONNECTION_CHAN_NET.is_empty() {
+                    let _ = ACTIVE_CONNECTION_CHAN_NET.receiver().try_receive();
+                }
                 let _ = active_net_sender.try_send(status.active);
                 info!("[NetMgr] Notify {:?}", status.active);
                 info!(
