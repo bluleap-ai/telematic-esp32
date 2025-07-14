@@ -1,5 +1,7 @@
 use heapless::Vec;
 
+#[allow(unused_imports)]
+use log::{error, info, warn};
 pub struct DnsBuilder {
     raw: heapless::Vec<u8, 80>,
 }
@@ -9,33 +11,50 @@ impl DnsBuilder {
         let mut query: Vec<u8, 80> = Vec::new();
 
         // Header
-        let _ = query.extend_from_slice(&[
+        if let Err(_) = query.extend_from_slice(&[
             0xAB, 0xCD, // Transaction ID (arbitrary)
             0x01, 0x00, // Flags: standard query
             0x00, 0x01, // Questions: 1
             0x00, 0x00, // Answer RRs: 0
             0x00, 0x00, // Authority RRs: 0
             0x00, 0x00, // Additional RRs: 0
-        ]);
+        ]) {
+            error!("[DNS] Failed to add header to DNS query")
+        };
 
         // Question
         for part in domain.split('.') {
-            let _ = query.push(part.len() as u8); // Label length
-            let _ = query.extend_from_slice(part.as_bytes()); // Label
+            // Label length
+            if let Err(_) = query.push(part.len() as u8) {
+                error!("[DNS] Failed to add label length for {part:?}");
+            };
+            // Label
+            if let Err(_) = query.extend_from_slice(part.as_bytes()) {
+                error!("[DNS] Failed to extend from slide for {part:?}");
+            };
         }
-        let _ = query.push(0); // End of domain name
-        let _ = query.extend_from_slice(&[
+        // End of domain name
+        if let Err(_) = query.push(0) {
+            error!("[DNS] Failed to add domain name terminator");
+        }; 
+        if let Err(_) = query.extend_from_slice(&[
             0x00, 0x01, // Type: A (IPv4 address)
             0x00, 0x01, // Class: IN (Internet)
-        ]);
+        ]) {
+            error!("[DNS] Failed to add query type and class");
+        };
 
         Self { raw: query }
     }
 
     pub fn query_data(mut self) -> heapless::Vec<u8, 80> {
         let length = self.raw.len();
-        let _ = self.raw.insert(0, (length & 0xFF) as u8);
-        let _ = self.raw.insert(0, (length >> 8) as u8);
+        if let Err(_) = self.raw.insert(0, (length & 0xFF) as u8) {
+            error!("[DNS] Failed to insert length low byte");
+        };
+        if let Err(_) = self.raw.insert(0, (length >> 8) as u8) {
+            error!("[DNS] Failed to insert length high byte");
+        };
         self.raw
     }
 
