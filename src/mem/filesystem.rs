@@ -51,7 +51,7 @@ impl From<ExFlashError> for FsError {
 }
 
 // FlashRegion: Logical to physical address mapping for different data sections.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)] // thêm Copy + Clone
+#[derive(Copy, Clone, Debug, Eq, PartialEq)] // add Copy + Clone
 #[allow(dead_code)]
 pub enum FlashRegion {
     Firmware = 0x000000,
