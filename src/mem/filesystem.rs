@@ -302,10 +302,16 @@ impl<'a> FlashController<'a> {
         // Compute CRC32 over data_len and data
         let data_len = data.len() as u32;
         let mut crc_input = Vec::<u8, 4096>::new();
-        crc_input
-            .extend_from_slice(&data_len.to_le_bytes())
-            .unwrap();
-        crc_input.extend_from_slice(data).unwrap();
+
+        if crc_input.extend_from_slice(&data_len.to_le_bytes()).is_err() {
+            error!("CRC input buffer overflow for data length");
+            return Err(FsError::FileTooLarge);
+        }
+        if crc_input.extend_from_slice(data).is_err() {
+            error!("CRC input buffer overflow for file data");
+            return Err(FsError::FileTooLarge);
+        }
+
         let crc = crc32fast::hash(&crc_input); // Updated to include data_len
 
         let file_size = 1 + filename.len() + 4 + data.len() + 4;
@@ -334,11 +340,26 @@ impl<'a> FlashController<'a> {
 
         // Prepare the file buffer
         let mut buf = Vec::<u8, 4096>::new();
-        buf.push(filename.len() as u8).unwrap();
-        buf.extend_from_slice(filename.as_bytes()).unwrap();
-        buf.extend_from_slice(&data_len.to_le_bytes()).unwrap();
-        buf.extend_from_slice(data).unwrap();
-        buf.extend_from_slice(&crc.to_le_bytes()).unwrap();
+        if buf.push(filename.len() as u8).is_err() {
+            error!("Buffer overflow when adding filename length");
+            return Err(FsError::FileTooLarge);
+        }
+        if buf.extend_from_slice(filename.as_bytes()).is_err() {
+            error!("Buffer overflow when adding filename");
+            return Err(FsError::FileTooLarge);
+        }
+        if buf.extend_from_slice(&data_len.to_le_bytes()).is_err() {
+            error!("Buffer overflow when adding data length");
+            return Err(FsError::FileTooLarge);
+        }
+        if buf.extend_from_slice(data).is_err() {
+            error!("Buffer overflow when adding file data");
+            return Err(FsError::FileTooLarge);
+        }
+        if buf.extend_from_slice(&crc.to_le_bytes()).is_err() {
+            error!("Buffer overflow when adding CRC");
+            return Err(FsError::FileTooLarge);
+        }
 
         info!(
             "Prepared file buffer, first 16 bytes: {:?}",
@@ -583,10 +604,14 @@ impl<'a> FlashController<'a> {
         // Compute CRC32 over data_len and data
         let data_len = data.len() as u32;
         let mut crc_input = Vec::<u8, 4096>::new();
-        crc_input
-            .extend_from_slice(&data_len.to_le_bytes())
-            .unwrap();
-        crc_input.extend_from_slice(data);
+        if crc_input.extend_from_slice(&data_len.to_le_bytes()).is_err() {
+            error!("CRC input buffer overflow for firmware data length");
+            return Err(FsError::FileTooLarge);
+        }
+        if crc_input.extend_from_slice(data).is_err() {
+            error!("CRC input buffer overflow for firmware data");
+            return Err(FsError::FileTooLarge);
+        }
         let crc = crc32fast::hash(&crc_input);
 
         let mut metadata = [0u8; 272];
@@ -708,12 +733,18 @@ impl<'a> FlashController<'a> {
                 }
                 let stored_crc = u32::from_le_bytes(crc_buf);
                 let mut crc_input = Vec::<u8, 4096>::new();
-                crc_input
-                    .extend_from_slice(&data_len.to_le_bytes())
-                    .unwrap();
-                crc_input
+                if crc_input.extend_from_slice(&data_len.to_le_bytes()).is_err()
+                {
+                    error!("CRC input buffer overflow when adding data length");
+                    return Err(FsError::FileTooLarge);
+                }
+                if crc_input
                     .extend_from_slice(&buffer[..data_len as usize])
-                    .unwrap();
+                    .is_err()
+                {
+                    error!("CRC input buffer overflow when adding file data");
+                    return Err(FsError::FileTooLarge);
+                }
                 let computed_crc = crc32fast::hash(&crc_input);
                 if stored_crc != computed_crc {
                     error!(
@@ -759,17 +790,25 @@ impl<'a> FlashController<'a> {
                 // Compute expected CRC32
                 let data_len = expected_data.len() as u32;
                 let mut crc_input = Vec::<u8, 4096>::new();
-                crc_input
-                    .extend_from_slice(&data_len.to_le_bytes())
-                    .unwrap();
-                crc_input.extend_from_slice(expected_data).unwrap();
+                if crc_input.extend_from_slice(&data_len.to_le_bytes()).is_err() {
+                    error!("CRC input buffer overflow for expected data length");
+                    return false;
+                }
+                if crc_input.extend_from_slice(expected_data).is_err() {
+                    error!("CRC input buffer overflow for expected data");
+                    return false;
+                }
                 let expected_crc = crc32fast::hash(&crc_input);
                 // Recompute CRC32 for read data
                 let mut crc_input = Vec::<u8, 4096>::new();
-                crc_input
-                    .extend_from_slice(&data_len.to_le_bytes())
-                    .unwrap();
-                crc_input.extend_from_slice(&buf[..n]).unwrap();
+                if crc_input.extend_from_slice(&data_len.to_le_bytes()).is_err() {
+                    error!("CRC input buffer overflow for read data length");
+                    return false;
+                }
+                if crc_input.extend_from_slice(&buf[..n]).is_err() {
+                    error!("CRC input buffer overflow for read data");
+                    return false;
+                }
                 let computed_crc = crc32fast::hash(&crc_input);
                 if computed_crc == expected_crc {
                     info!(
@@ -829,7 +868,10 @@ impl<'a> FlashController<'a> {
                 .map_err(FsError::FlashError)?;
             let name_str = core::str::from_utf8(&name_buf[..name_len]).unwrap_or("<invalid>");
             let mut name = heapless::String::<MAX_NAME>::new();
-            name.push_str(name_str).unwrap();
+            if name.push_str(name_str).is_err() {
+                error!("Failed to create filename string for file at 0x{addr:08X}");
+                return Err(FsError::InvalidAddress);
+            }
 
             let mut size_buf = [0u8; 4];
             let size_addr = addr + 1 + name_len as u32;

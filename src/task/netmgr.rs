@@ -64,7 +64,9 @@ const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 pub async fn net_manager_task(spawner: Spawner) -> ! {
     info!("[NetMgr] Connection manager started");
 
+    // Init connection status tracking
     let mut status = ConnectionStatus::default();
+    // Set up communication channels
     let event_receiver = CONN_EVENT_CHAN.receiver();
     let status_sender = CONN_STATUS_CHAN.sender();
     let switch_receiver = SWITCH_REQUEST_CHAN.receiver();
@@ -83,6 +85,7 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
                 info!("[NetMgr] Got connection event: {event:?}");
                 // Handle connection events
                 match event {
+                    // === WIFI CONNECTION EVENTS ===
                     ConnectionEvent::WiFiConnected => {
                         info!("[NetMgr] handle WiFi connected event");
                         status.wifi_available = true;
@@ -95,6 +98,7 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
                         if !is_lte_available(&status)
                             && (esp_wifi::wifi::wifi_state() != WifiState::StaConnected)
                         {
+                            // Clear old health check monitor request
                             while !CHECK_LTE_HEALTH_CHAN.is_empty() {
                                 let _ = CHECK_LTE_HEALTH_CHAN.receiver().try_receive();
                             }
@@ -123,6 +127,7 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
                             }
                         }
                     }
+                    // === LTE CONNECTION EVENTS ===
                     ConnectionEvent::LteConnected | ConnectionEvent::LteRegistered => {
                         info!("[NetMgr] handle LTE connected/registered event");
                         status.lte_available = true;
@@ -164,6 +169,7 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
                     ACTIVE_CONNECTION_CHAN_LTE.len()
                 );
             }
+            // Handle periodic health check timeout
             embassy_futures::select::Either::Second(_) => {
                 info!("[NetMgr] Health check timeout reached");
             }
@@ -183,6 +189,12 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
         }
     }
 }
+/// WiFi health monitoring task
+///
+/// Continuously monitors the actual WiFi connection state and reports changes
+///
+/// Checks the ESP32's WiFi state every HEALTH_CHECK_INTERVAL and sends
+/// appropriate connection events.
 #[embassy_executor::task]
 async fn net_health_monitor(
     event_sender: Sender<'static, CriticalSectionRawMutex, ConnectionEvent, 16>,
@@ -191,6 +203,7 @@ async fn net_health_monitor(
 
     loop {
         Timer::after(HEALTH_CHECK_INTERVAL).await;
+        // Check the WiFi state from the ESP32 WiFi driver
         if esp_wifi::wifi::wifi_state() != WifiState::StaConnected {
             match event_sender.try_send(ConnectionEvent::WiFiDisconnected) {
                 Ok(_) => info!("[NetMgr] WiFi disconnected"),

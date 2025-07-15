@@ -2,13 +2,17 @@
   "[rust]": {
     "editor.defaultFormatter": "rust-lang.rust-analyzer",
     "editor.formatOnSave": true,
-    "editor.formatOnPaste": true
+    "editor.formatOnPaste": true,
   },
-  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.defaultFormatter": "rust-lang.rust-analyzer",
   "editor.formatOnPaste": true,
   "editor.formatOnSave": true,
   "[ignore]": {
-    "editor.defaultFormatter": "foxundermoon.shell-format"
-  }
-  "rust-analyzer.checkOnSave.command": "none"
+    "editor.defaultFormatter": "tamasfe.even-better-toml"
+  },
+  "[jsonc]": {
+    "editor.defaultFormatter": "vscode.json-language-features"
+  },
+  "rust-analyzer.check.command": "check",
+  "rust-analyzer.checkOnSave": true,
 }
