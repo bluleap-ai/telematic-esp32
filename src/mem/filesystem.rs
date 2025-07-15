@@ -24,20 +24,11 @@
 // pub mod ex_flash;
 #[allow(unused_imports)]
 use crate::mem::ex_flash::{ExFlashError, W25Q128FVSG};
-use embassy_executor::Spawner;
-use embassy_time::{with_timeout, Duration, Timer};
+// use embassy_executor::Spawner;
+use embassy_time::{with_timeout, Duration};
 use esp_backtrace as _;
-use esp_hal::time::RateExtU32;
-use esp_hal::{
-    clock::CpuClock,
-    gpio::Output,
-    spi::{
-        master::{Config, Spi},
-        Mode,
-    },
-    timer::timg::TimerGroup,
-};
-use heapless::{String, Vec};
+// use esp_hal::time::Rate;
+use heapless::{/*String,*/ Vec};
 use log::{error, info, warn};
 
 // FsError: High-level errors returned by the FlashController.
@@ -303,7 +294,10 @@ impl<'a> FlashController<'a> {
         let data_len = data.len() as u32;
         let mut crc_input = Vec::<u8, 4096>::new();
 
-        if crc_input.extend_from_slice(&data_len.to_le_bytes()).is_err() {
+        if crc_input
+            .extend_from_slice(&data_len.to_le_bytes())
+            .is_err()
+        {
             error!("CRC input buffer overflow for data length");
             return Err(FsError::FileTooLarge);
         }
@@ -604,14 +598,10 @@ impl<'a> FlashController<'a> {
         // Compute CRC32 over data_len and data
         let data_len = data.len() as u32;
         let mut crc_input = Vec::<u8, 4096>::new();
-        if crc_input.extend_from_slice(&data_len.to_le_bytes()).is_err() {
-            error!("CRC input buffer overflow for firmware data length");
-            return Err(FsError::FileTooLarge);
-        }
-        if crc_input.extend_from_slice(data).is_err() {
-            error!("CRC input buffer overflow for firmware data");
-            return Err(FsError::FileTooLarge);
-        }
+        crc_input
+            .extend_from_slice(&data_len.to_le_bytes())
+            .unwrap();
+        let _ = crc_input.extend_from_slice(data);
         let crc = crc32fast::hash(&crc_input);
 
         let mut metadata = [0u8; 272];
@@ -733,7 +723,9 @@ impl<'a> FlashController<'a> {
                 }
                 let stored_crc = u32::from_le_bytes(crc_buf);
                 let mut crc_input = Vec::<u8, 4096>::new();
-                if crc_input.extend_from_slice(&data_len.to_le_bytes()).is_err()
+                if crc_input
+                    .extend_from_slice(&data_len.to_le_bytes())
+                    .is_err()
                 {
                     error!("CRC input buffer overflow when adding data length");
                     return Err(FsError::FileTooLarge);
@@ -790,7 +782,10 @@ impl<'a> FlashController<'a> {
                 // Compute expected CRC32
                 let data_len = expected_data.len() as u32;
                 let mut crc_input = Vec::<u8, 4096>::new();
-                if crc_input.extend_from_slice(&data_len.to_le_bytes()).is_err() {
+                if crc_input
+                    .extend_from_slice(&data_len.to_le_bytes())
+                    .is_err()
+                {
                     error!("CRC input buffer overflow for expected data length");
                     return false;
                 }
@@ -801,7 +796,10 @@ impl<'a> FlashController<'a> {
                 let expected_crc = crc32fast::hash(&crc_input);
                 // Recompute CRC32 for read data
                 let mut crc_input = Vec::<u8, 4096>::new();
-                if crc_input.extend_from_slice(&data_len.to_le_bytes()).is_err() {
+                if crc_input
+                    .extend_from_slice(&data_len.to_le_bytes())
+                    .is_err()
+                {
                     error!("CRC input buffer overflow for read data length");
                     return false;
                 }

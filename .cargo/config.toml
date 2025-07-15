@@ -34,3 +34,5 @@ target = "riscv32imac-unknown-none-elf"
 [unstable]
 build-std = ["alloc", "core"]
 
+[net]
+git-fetch-with-cli = true

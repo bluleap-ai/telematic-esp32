@@ -17,14 +17,17 @@ esp-backtrace = { version = "0.15.0", features = [
     "panic-handler",
     "println",
 ] }
-esp-hal = { version = "0.23.0", features = ["esp32c6", "log"], optional = true }
-esp-hal-embassy = { version = "0.6.0", features = ["esp32c6"], optional = true }
-esp-alloc = { version = "0.6.0" }
+#esp-hal = { version = "1.0.0-beta.1", features = ["esp32c6", "log"], optional = true }
+
+esp-hal = { version = "1.0.0-beta.1", features = ["esp32c6", "unstable"] , optional = true}
+
+esp-hal-embassy = { version = "0.8.1", features = ["esp32c6"], optional = true }
+esp-alloc = { version = "0.8.0" }
 esp-storage = { version = "0.4.0", features = ["esp32c6"], optional = true }
 
 # Embassy framework
 embassy-executor = { version = "0.7.0", features = ["task-arena-size-131072"] }
-embassy-net = { version = "0.6.0", features = [
+embassy-net = { version = "0.7.0", features = [
     "tcp",
     "udp",
     "dhcpv4",
@@ -35,12 +38,14 @@ embassy-sync = "0.6.1"
 embassy-futures = "0.1.1"
 # ESP32 specific
 esp-println = { version = "0.13.0", features = ["esp32c6", "log"] }
-esp-wifi = { version = "0.12.0", features = ["esp32c6", "wifi"] }
+esp-wifi = { version = "0.14.1", features = ["esp32c6", "wifi"] }
 
 # OTA
-esp32-mender-client = { git = "https://github.com/virust-ai/esp32-mender-client", branch = "main", features = [
-    "esp32c6",
+esp32-mender-client = { git = "http://gitlab-scm.banvien.com.vn/playground/banvien-iiot/virust-ai/esp32-mender-client", branch = "main", features = [
+   "esp32c6",
 ] }
+
+# esp32-mender-client = { path = "./esp32-mender-client", features = ["esp32c6"] }
 
 # Other dependencies
 embedded-can = "0.4.1"
@@ -65,24 +70,12 @@ smoltcp = { version = "0.12.0", default-features = false, features = [
     "socket-dhcpv4",
 ] }
 
+
+
 # Use serde with no_std compatibility
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde-json-core = { version = "0.6.0", default-features = false }
 crc32fast = { version = "1.4.2", default-features = false }
-
-[profile.dev]
-# Rust debug is too slow.
-# For debug builds always builds with some optimization
-opt-level = "s"
-
-[profile.release]
-codegen-units = 1        # LLVM can perform better optimizations using a single thread
-debug = 2
-debug-assertions = false
-incremental = false
-lto = 'fat'
-opt-level = 's'
-overflow-checks = false
 
 [features]
 default = [
@@ -95,12 +88,21 @@ default = [
 ]
 ota = []
 wdg = []
-test = []
 
-# These dependencies are not included in the compiled binary when building the project for release
-# (cargo build --release).
-[dev-dependencies]
-probe-rs = "0.27.0"
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1        # LLVM can perform better optimizations using a single thread
+debug = 2
+debug-assertions = false
+incremental = false
+lto = "fat"
+opt-level = "s"
+overflow-checks = false
+
 
 # [[bin]]
 # name = "test_ex_flash"
