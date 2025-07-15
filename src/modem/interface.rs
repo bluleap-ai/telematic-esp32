@@ -1120,7 +1120,7 @@ impl Modem {
         //     Ok(res) => {
         //         info!("[LTE] GPS RMC data received: {res:?}");
 
-        let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
+        // let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
         let mut device_id = heapless::String::new();
         let mut trip_id = heapless::String::new();
 
@@ -1133,23 +1133,23 @@ impl Modem {
             return Err(ModemError::Command);
         };
 
-        let trip_data = TripData {
-            device_id,
-            trip_id,
-            latitude: ((res.latitude as u64 / 100) as f64) + ((res.latitude % 100.0f64) / 60.0f64),
-            longitude: ((res.longitude as u64 / 100) as f64)
-                + ((res.longitude % 100.0f64) / 60.0f64),
-            timestamp,
-        };
-
-        // Hardcoded test data
         // let trip_data = TripData {
         //     device_id,
         //     trip_id,
-        //     latitude: 60.0f64,
-        //     longitude: 60.0f64,
-        //     timestamp: 12u64,
+        //     latitude: ((res.latitude as u64 / 100) as f64) + ((res.latitude % 100.0f64) / 60.0f64),
+        //     longitude: ((res.longitude as u64 / 100) as f64)
+        //         + ((res.longitude % 100.0f64) / 60.0f64),
+        //     timestamp,
         // };
+
+        // Hardcoded test data
+        let trip_data = TripData {
+            device_id,
+            trip_id,
+            latitude: 60.0f64,
+            longitude: 60.0f64,
+            timestamp: 12u64,
+        };
 
         if gps_channel.try_send(trip_data.clone()).is_err() {
             error!("[LTE] Failed to send TripData to channel");
@@ -1157,46 +1157,6 @@ impl Modem {
             info!("[LTE] GPS data sent to channel: {trip_data:?}");
         }
         Ok(()) // for testing
-               // Serialize to JSON
-               //         if let Ok(len) = serde_json_core::to_slice(&trip_data, &mut buf) {
-               //             let json = core::str::from_utf8(&buf[..len])
-               //                 .unwrap_or_default()
-               //                 .replace('\"', "'");
-
-        //             if trip_payload.push_str(&json).is_err() {
-        //                 error!("[LTE] Payload buffer overflow");
-        //                 return Err(ModemError::Command);
-        //             }
-
-        //             info!("[LTE] MQTT payload (GPS/trip): {trip_payload}");
-        //             if check_result(
-        //                 self.client
-        //                     .send(&MqttPublishExtended {
-        //                         tcp_connect_id: 0,
-        //                         msg_id: 0,
-        //                         qos: 0,
-        //                         retain: 0,
-        //                         topic: trip_topic,
-        //                         payload: trip_payload,
-        //                     })
-        //                     .await,
-        //             ) {
-        //                 info!("[LTE] Trip data published successfully");
-        //                 Ok(())
-        //             } else {
-        //                 error!("[LTE] Failed to publish trip data");
-        //                 Err(ModemError::Command)
-        //             }
-        //         } else {
-        //             error!("[LTE] Failed to serialize trip/GPS data");
-        //             Err(ModemError::Command)
-        //         }
-        //     }
-        //     Err(e) => {
-        //         warn!("[LTE] Failed to retrieve GPS data: {e:?}");
-        //         Err(ModemError::Command)
-        //     }
-        // }
     }
 }
 

@@ -46,7 +46,7 @@ use esp_hal::{
     twai::{self, TwaiMode},
     uart::{Config, RxConfig, Uart},
 };
-use esp_wifi::{init, EspWifiController};
+use esp_wifi::{init, EspWifiController, InitializationError};
 use log::{error, info};
 use modem::*;
 use static_cell::StaticCell;
