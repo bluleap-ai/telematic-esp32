@@ -104,6 +104,10 @@ async fn main(spawner: Spawner) -> ! {
                     InitializationError::General(code) => {
                         error!("Failed to initialize WiFi - General: {code:?}");
                     }
+                    InitializationError::InterruptsDisabled => {
+                        error!("Failed to initialize WiFi - Interrupts are disabled");
+                    }
+                    _ => todo!(),
                 }
 
                 // Wifi is a critical component (could replace the panic! with the code to reset later)
@@ -113,39 +117,39 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     // Create Wifi interface
-    // let wifi = peripherals.WIFI;
-    // let (wifi_interface, controller) = match esp_wifi::wifi::new_with_mode(
-    //     init,
-    //     wifi,
-    //     WifiStaDevice,
-    // ) {
-    //     Ok(val) => val,
-    //     Err(e) => {
-    //         match e {
-    //             esp_wifi::wifi::WifiError::NotInitialized => {
-    //                 error!(" Wi-Fi module is not initialized or not initialized for `Wi-Fi` - NotInitialized");
-    //             }
-    //             esp_wifi::wifi::WifiError::InternalError(internal_err) => {
-    //                 error!("Internal Wi-Fi error: {internal_err:?}");
-    //             }
-    //             esp_wifi::wifi::WifiError::Disconnected => {
-    //                 error!("The device disconnected from the network or failed to connect to it - Disconnected");
-    //             }
-    //             esp_wifi::wifi::WifiError::UnknownWifiMode => {
-    //                 error!("Unknown Wi-Fi mode (not Sta/Ap/ApSta) - UnknowWifiMode");
-    //             }
-    //             esp_wifi::wifi::WifiError::Unsupported => {
-    //                 error!("Unsupported operation or mode - Unsupported");
-    //             }
-    //         }
-    //         // Could replace panic! with the code to reset process
-    //         panic!("Fail to create Wifi interface");
-    //     }
-    // };
+    let wifi = peripherals.WIFI;
+    let (controller, wifi_interface) = match esp_wifi::wifi::new(init, wifi) {
+        Ok(val) => val,
+        Err(e) => {
+            match e {
+                esp_wifi::wifi::WifiError::NotInitialized => {
+                    error!(" Wi-Fi module is not initialized or not initialized for `Wi-Fi` - NotInitialized");
+                }
+                esp_wifi::wifi::WifiError::InternalError(internal_err) => {
+                    error!("Internal Wi-Fi error: {internal_err:?}");
+                }
+                esp_wifi::wifi::WifiError::Disconnected => {
+                    error!("The device disconnected from the network or failed to connect to it - Disconnected");
+                }
+                esp_wifi::wifi::WifiError::UnknownWifiMode => {
+                    error!("Unknown Wi-Fi mode (not Sta/Ap/ApSta) - UnknowWifiMode");
+                }
+                esp_wifi::wifi::WifiError::Unsupported => {
+                    error!("Unsupported operation or mode - Unsupported");
+                }
+                esp_wifi::wifi::WifiError::InvalidArguments => {
+                    error!("Invalid arguments provided to Wi-Fi function");
+                }
+                _ => todo!(),
+            }
+            // Could replace panic! with the code to reset process
+            panic!("Fail to create Wifi interface");
+        }
+    };
 
     // Configure network stack for DHCP
     // modified: new_with_mode -> new, change position of wifi_interface and controller
-    let (controller, wifi_interface) = esp_wifi::wifi::new(init, wifi).unwrap();
+    // let (controller, wifi_interface) = esp_wifi::wifi::new(init, wifi).unwrap();
 
     let config = embassy_net::Config::dhcpv4(Default::default());
     #[cfg(feature = "wdg")]

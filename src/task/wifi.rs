@@ -40,7 +40,7 @@ pub async fn connection(mut controller: WifiController<'static>) {
         // Check if the WiFi controller needs to be started or configured
         if !matches!(controller.is_started(), Ok(true)) {
             // String<32> is because in ClientConfiguration need ssid to be String<32>
-            let ssid: heapless::String<32> = match WIFI_SSID.try_into() {
+            let ssid = match WIFI_SSID.try_into() {
                 Ok(ssid) => ssid,
                 Err(e) => {
                     error!("[WiFi] Invalid SSID format: {e:?}");
@@ -48,7 +48,7 @@ pub async fn connection(mut controller: WifiController<'static>) {
                 }
             };
             // String<64> is because in ClientConfiguration need password to be String<64>
-            let password: heapless::String<64> = match WIFI_PSWD.try_into() {
+            let password = match WIFI_PSWD.try_into() {
                 Ok(pwd) => pwd,
                 Err(e) => {
                     error!("[WiFi] Invalid password format: {e:?}");
