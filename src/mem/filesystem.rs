@@ -24,20 +24,11 @@
 // pub mod ex_flash;
 #[allow(unused_imports)]
 use crate::mem::ex_flash::{ExFlashError, W25Q128FVSG};
-use embassy_executor::Spawner;
-use embassy_time::{with_timeout, Duration, Timer};
+// use embassy_executor::Spawner;
+use embassy_time::{with_timeout, Duration};
 use esp_backtrace as _;
-use esp_hal::time::RateExtU32;
-use esp_hal::{
-    clock::CpuClock,
-    gpio::Output,
-    spi::{
-        master::{Config, Spi},
-        Mode,
-    },
-    timer::timg::TimerGroup,
-};
-use heapless::{String, Vec};
+// use esp_hal::time::Rate;
+use heapless::{/*String,*/ Vec};
 use log::{error, info, warn};
 
 // FsError: High-level errors returned by the FlashController.
@@ -586,7 +577,7 @@ impl<'a> FlashController<'a> {
         crc_input
             .extend_from_slice(&data_len.to_le_bytes())
             .unwrap();
-        crc_input.extend_from_slice(data);
+        let _ = crc_input.extend_from_slice(data);
         let crc = crc32fast::hash(&crc_input);
 
         let mut metadata = [0u8; 272];

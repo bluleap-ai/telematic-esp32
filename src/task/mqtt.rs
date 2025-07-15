@@ -30,9 +30,10 @@ pub async fn wifi_mqtt_handler(
     stack: &'static Stack<'static>,
     can_channel: &'static TwaiOutbox,
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
-    mut sha: SHA,
-    mut rsa: RSA,
+    sha: SHA<'static>,
+    rsa: RSA<'static>,
 ) -> ! {
+    let tls = Tls::new(sha).unwrap().with_hardware_rsa(rsa);
     loop {
         if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_NET.receiver().try_receive() {
             IS_WIFI.store(
@@ -76,7 +77,7 @@ pub async fn wifi_mqtt_handler(
         }
 
         let certificates = Certificates {
-            ca_chain: X509::pem(concat!(include_str!("../../certs/crt.pem"), "\0").as_bytes()).ok(),
+            ca_chain: X509::pem(concat!(include_str!("../../certs/ca.crt"), "\0").as_bytes()).ok(),
             certificate: X509::pem(concat!(include_str!("../../certs/dvt.crt"), "\0").as_bytes())
                 .ok(),
             private_key: X509::pem(concat!(include_str!("../../certs/dvt.key"), "\0").as_bytes())
@@ -84,7 +85,6 @@ pub async fn wifi_mqtt_handler(
             password: None,
         };
 
-        let tls = Tls::new(&mut sha).unwrap().with_hardware_rsa(&mut rsa);
         let session = match Session::new(
             socket,
             Mode::Client {

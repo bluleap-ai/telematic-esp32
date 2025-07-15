@@ -13,7 +13,7 @@ mod util;
 //use crate::hal::flash;
 use crate::cfg::net_cfg::*;
 use crate::net::atcmd::Urc;
-use mem::ex_flash::{ExFlashError, W25Q128FVSG};
+use mem::ex_flash::{/*ExFlashError, */ W25Q128FVSG};
 use mem::filesystem::{FileEntry, FlashController, FlashRegion};
 use task::can::*;
 use task::lte::*;
@@ -35,18 +35,18 @@ use esp_backtrace as _;
 use esp_hal::rtc_cntl::{Rtc, RwdtStage};
 use esp_hal::{
     clock::CpuClock,
-    gpio::Output,
+    gpio::{Level, Output, OutputConfig},
     rng::Trng,
     spi::{
         master::{Config as otherConfig, Spi},
         Mode,
     },
-    time::RateExtU32,
+    time::Rate,
     timer::timg::TimerGroup,
     twai::{self, TwaiMode},
-    uart::{Config, Uart},
+    uart::{Config, RxConfig, Uart},
 };
-use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
+use esp_wifi::{init, EspWifiController};
 use log::{error, info};
 use modem::*;
 use static_cell::StaticCell;
@@ -71,12 +71,13 @@ const DVT_KEY: &[u8] = include_bytes!("../certs/dvt.key");
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
     let peripherals = esp_hal::init({
-        let mut config = esp_hal::Config::default();
-        config.cpu_clock = CpuClock::max();
+        let config = esp_hal::Config::default();
+        let _ = config.with_cpu_clock(CpuClock::max());
         config
     });
+
     info!("Telematic started");
-    esp_alloc::heap_allocator!(200 * 1024);
+    esp_alloc::heap_allocator!(size: 200 * 1024);
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     esp_hal_embassy::init(timg1.timer0);
@@ -86,8 +87,9 @@ async fn main(spawner: Spawner) -> ! {
         init(timg0.timer0, trng.rng, peripherals.RADIO_CLK).unwrap()
     );
     let wifi = peripherals.WIFI;
-    let (wifi_interface, controller) =
-        esp_wifi::wifi::new_with_mode(init, wifi, WifiStaDevice).unwrap();
+    // modified: new_with_mode -> new, change position of wifi_interface and controller
+    let (controller, wifi_interface) = esp_wifi::wifi::new(init, wifi).unwrap();
+
     let config = embassy_net::Config::dhcpv4(Default::default());
     #[cfg(feature = "wdg")]
     let mut rtc = {
@@ -98,9 +100,9 @@ async fn main(spawner: Spawner) -> ! {
     };
 
     let seed = 1234;
-
+    // modified: wifi_interface is a interface, not a WifiDevice, add ".sta" to get Device
     let (stack, runner) = embassy_net::new(
-        wifi_interface,
+        wifi_interface.sta,
         config,
         mk_static!(StackResources<3>, StackResources::<3>::new()),
         seed,
@@ -112,10 +114,10 @@ async fn main(spawner: Spawner) -> ! {
     // ==============================
     let uart_tx_pin = peripherals.GPIO23;
     let uart_rx_pin = peripherals.GPIO15;
-    let pen_pin = Output::new(peripherals.GPIO21, esp_hal::gpio::Level::High);
-    let dtr_pin = Output::new(peripherals.GPIO22, esp_hal::gpio::Level::High);
+    let pen_pin = Output::new(peripherals.GPIO21, Level::High, OutputConfig::default());
+    let dtr_pin = Output::new(peripherals.GPIO22, Level::High, OutputConfig::default());
 
-    let config = Config::default().with_rx_fifo_full_threshold(64);
+    let config = Config::default().with_rx(RxConfig::default().with_fifo_full_threshold(64));
     let uart0 = Uart::new(peripherals.UART0, config)
         .unwrap()
         .with_rx(uart_rx_pin)
@@ -168,11 +170,11 @@ async fn main(spawner: Spawner) -> ! {
     let sclk = peripherals.GPIO18;
     let miso = peripherals.GPIO20;
     let mosi = peripherals.GPIO19;
-    let cs = Output::new(peripherals.GPIO3, esp_hal::gpio::Level::High);
+    let cs = Output::new(peripherals.GPIO3, Level::High, OutputConfig::default());
     let spi = Spi::new(
         peripherals.SPI2,
         otherConfig::default()
-            .with_frequency(10u32.MHz())
+            .with_frequency(Rate::from_mhz(10u32)) //10u32.MHz()
             .with_mode(Mode::_0),
     )
     .unwrap()
@@ -215,7 +217,7 @@ async fn main(spawner: Spawner) -> ! {
     ];
     let mut fs = FlashController::new(&mut flash);
 
-    fs.print_directory(FlashRegion::Certstore).await;
+    let _ = fs.print_directory(FlashRegion::Certstore).await;
     spawner.spawn(can_receiver(can_rx, can_channel)).ok();
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(runner)).ok();
@@ -245,7 +247,7 @@ async fn main(spawner: Spawner) -> ! {
         &URC_CHANNEL,
         ModemModel::QuectelEG800k,
     );
-    let ca_chain = include_str!("../certs/crt.pem").as_bytes();
+    let ca_chain = include_str!("../certs/ca.crt").as_bytes();
     let certificate = include_str!("../certs/dvt.crt").as_bytes();
     let private_key = include_str!("../certs/dvt.key").as_bytes();
 

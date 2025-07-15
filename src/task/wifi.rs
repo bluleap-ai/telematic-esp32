@@ -2,9 +2,7 @@ use crate::cfg::net_cfg::{WIFI_PSWD, WIFI_SSID};
 use embassy_net::Runner;
 use embassy_time::{Duration, Timer};
 use esp_wifi::wifi::WifiState;
-use esp_wifi::wifi::{
-    ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiStaDevice,
-};
+use esp_wifi::wifi::{ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent};
 use log::{error, info, warn};
 #[embassy_executor::task]
 pub async fn connection(mut controller: WifiController<'static>) {
@@ -51,7 +49,7 @@ pub async fn connection(mut controller: WifiController<'static>) {
 }
 
 #[embassy_executor::task]
-pub async fn net_task(mut runner: Runner<'static, WifiDevice<'static, WifiStaDevice>>) {
+pub async fn net_task(mut runner: Runner<'static, WifiDevice<'static>>) {
     info!("[WiFi] Network task started");
     runner.run().await
 }
