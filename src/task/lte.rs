@@ -9,7 +9,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
-use log::{error, info, warn};
+use esp_wifi::wifi::WifiState;
+use log::{error, info};
 #[allow(dead_code)] // Suppress unused struct warning
 pub struct Lte {
     modem: Modem,

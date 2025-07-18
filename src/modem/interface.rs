@@ -3,7 +3,6 @@ use crate::net::atcmd::general::*;
 use crate::net::atcmd::response::*;
 use crate::net::atcmd::Urc;
 use crate::task::netmgr::{ConnectionEvent, CONN_EVENT_CHAN};
-use crate::util::time::utc_date_to_unix_timestamp;
 use atat::{
     asynch::{AtatClient, Client},
     AtatIngress, DefaultDigester, Ingress, UrcChannel,
@@ -150,6 +149,7 @@ impl Modem {
                     }
                 }
                 State::DisableEchoMode => {
+                    embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
                     if self.disable_echo_mode().await.is_ok() {
                         info!("[modem] Echo mode disabled successfully");
                         state = State::GetModelId;
@@ -342,7 +342,9 @@ impl Modem {
                         info!("[modem] Network registration checked successfully");
                         state = State::MqttOpenConnection;
                     } else {
-                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteUnregistered);
+                        if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteUnregistered) {
+                            error!("[modem] Failed to send LteUnregistered event: {e:?}");
+                        }
                         error!("[modem] LTE init failed at CheckNetworkRegistration");
                         return Err(ModemError::Command);
                     }
@@ -352,7 +354,9 @@ impl Modem {
                         info!("[modem] MQTT connection opened successfully");
                         state = State::MqttConnectBroker;
                     } else {
-                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
+                        if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected) {
+                            error!("[modem] Failed to send LteDisconnected event: {e:?}");
+                        }
                         error!("[modem] Failed to open MQTT connection");
                         return Err(ModemError::MqttConnection);
                     }
@@ -362,7 +366,9 @@ impl Modem {
                         info!("[modem] MQTT connected to broker successfully");
                         break;
                     } else {
-                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
+                        if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected) {
+                            error!("[modem] Failed to send LteDisconnected event: {e:?}");
+                        }
                         error!("[modem] Failed to connect to MQTT broker");
                         return Err(ModemError::MqttConnection);
                     }
@@ -374,7 +380,9 @@ impl Modem {
             }
             Timer::after(Duration::from_secs(1)).await;
         }
-        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected);
+        if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected) {
+            error!("[modem] Failed to send LteConnected event: {e:?}");
+        }
         Ok(())
     }
 
@@ -594,8 +602,18 @@ impl Modem {
     ) -> bool {
         let mut raw_data = heapless::Vec::<u8, 4096>::new();
         raw_data.clear();
-        let mut subscriber = self.urc_channel.subscribe().unwrap();
-        let _ = self.client.send(&FileList).await.unwrap();
+        let mut subscriber = match self.urc_channel.subscribe() {
+            Ok(sub) => sub,
+            Err(e) => {
+                error!("[modem] Failed to subscribe to URC channel: {e:?}");
+                return false;
+            }
+        };
+        if let Err(e) = self.client.send(&FileList).await {
+            error!("[modem] Failed to send FileList command: {e:?}");
+            return false;
+        }
+
         let now = Instant::now();
         while now.elapsed().as_secs() < 10 {
             Timer::after(Duration::from_secs(1)).await;
@@ -607,13 +625,19 @@ impl Modem {
         }
 
         for name in ["crt.pem", "dvt.crt", "dvt.key"] {
-            let _ = self
-                .client
-                .send(&FileDel {
-                    name: String::from_str(name).unwrap(),
-                })
-                .await;
-            info!("Deleted old {name}");
+            let name_str = match String::from_str(name) {
+                Ok(s) => s,
+                Err(_) => {
+                    error!("[modem] Failed to create string for file name: {name}");
+                    return false;
+                }
+            };
+            if let Err(e) = self.client.send(&FileDel { name: name_str }).await {
+                warn!("[modem] Failed to delete old file {name}: {e:?}");
+                // Continue anyway - file might not exist
+            } else {
+                info!("Deleted old {name}");
+            }
         }
 
         async fn upload_file(
@@ -671,74 +695,167 @@ impl Modem {
         }
 
         info!("Configuring MQTT over TLS...");
-        let _ = self
+        let recv_mode_name = match String::from_str("recv/mode") {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[modem] Failed to create string for recv/mode config");
+                return false;
+            }
+        };
+        if let Err(e) = self
             .client
             .send(&MqttConfig {
-                name: String::from_str("recv/mode").unwrap(),
+                name: recv_mode_name,
                 param_1: Some(0),
                 param_2: Some(0),
                 param_3: Some(1),
             })
-            .await;
-        let _ = self
+            .await
+        {
+            error!("[modem] Failed to configure MQTT recv/mode: {e:?}");
+            return false;
+        }
+
+        let ssl_name = match String::from_str("SSL") {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[modem] Failed to create string for SSL config");
+                return false;
+            }
+        };
+        if let Err(e) = self
             .client
             .send(&MqttConfig {
-                name: String::from_str("SSL").unwrap(),
+                name: ssl_name,
                 param_1: Some(0),
                 param_2: Some(1),
                 param_3: Some(2),
             })
-            .await;
+            .await
+        {
+            error!("[modem] Failed to configure MQTT SSL: {e:?}");
+            return false;
+        }
 
         for (cfg_name, path) in [
             ("cacert", "UFS:ca.crt"),
             ("clientcert", "UFS:dvt.crt"),
             ("clientkey", "UFS:dvt.key"),
         ] {
-            let _ = self
+            let config_name = match String::from_str(cfg_name) {
+                Ok(s) => s,
+                Err(_) => {
+                    error!("[modem] Failed to create string for config name: {cfg_name}");
+                    return false;
+                }
+            };
+
+            let cert_path = match String::from_str(path) {
+                Ok(s) => s,
+                Err(_) => {
+                    error!("[modem] Failed to create string for cert path: {path}");
+                    return false;
+                }
+            };
+
+            if let Err(e) = self
                 .client
                 .send(&SslConfigCert {
-                    name: String::from_str(cfg_name).unwrap(),
+                    name: config_name,
                     context_id: 2,
-                    cert_path: Some(String::from_str(path).unwrap()),
+                    cert_path: Some(cert_path),
                 })
-                .await;
+                .await
+            {
+                error!("[modem] Failed to configure SSL cert {cfg_name}: {e:?}");
+                return false;
+            }
         }
+        let name_seclevel = match String::from_str("seclevel") {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[modem] Failed to create string for seclevel config");
+                return false;
+            }
+        };
 
-        let _ = self
+        if let Err(e) = self
             .client
             .send(&SslConfigOther {
-                name: String::from_str("seclevel").unwrap(),
+                name: name_seclevel,
                 context_id: 2,
                 level: 2,
             })
-            .await;
-        let _ = self
+            .await
+        {
+            error!("[modem] Failed to configure SSL security level: {e:?}");
+            return false;
+        }
+
+        let sslversion_name = match String::from_str("sslversion") {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[modem] Failed to create string for sslversion config");
+                return false;
+            }
+        };
+        if let Err(e) = self
             .client
             .send(&SslConfigOther {
-                name: String::from_str("sslversion").unwrap(),
+                name: sslversion_name,
                 context_id: 2,
                 level: 4,
             })
-            .await;
-        let _ = self.client.send(&SslSetCipherSuite).await;
-        let _ = self
+            .await
+        {
+            error!("[modem] Failed to configure SSL version: {e:?}");
+            return false;
+        }
+        if let Err(e) = self.client.send(&SslSetCipherSuite).await {
+            error!("[modem] Failed to set SSL cipher suite: {e:?}");
+            return false;
+        }
+
+        let ignorelocaltime_name = match String::from_str("ignorelocaltime") {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[modem] Failed to create string for ignorelocaltime config");
+                return false;
+            }
+        };
+        if let Err(e) = self
             .client
             .send(&SslConfigOther {
-                name: String::from_str("ignorelocaltime").unwrap(),
+                name: ignorelocaltime_name,
                 context_id: 2,
                 level: 1,
             })
-            .await;
-        let _ = self
+            .await
+        {
+            error!("[modem] Failed to configure SSL ignore local time: {e:?}");
+            return false;
+        }
+
+        let version_name = match String::from_str("version") {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[modem] Failed to create string for version config");
+                return false;
+            }
+        };
+        if let Err(e) = self
             .client
             .send(&MqttConfig {
-                name: String::from_str("version").unwrap(),
+                name: version_name,
                 param_1: Some(0),
                 param_2: Some(4),
                 param_3: None,
             })
-            .await;
+            .await
+        {
+            error!("[modem] Failed to configure MQTT version: {e:?}");
+            return false;
+        }
 
         true
     }
@@ -754,6 +871,7 @@ impl Modem {
             Ok(())
         } else {
             Err(ModemError::MqttPublish)
+            // Should be Err(ModemError::NetworkRegistration)
         }
     }
 
@@ -816,13 +934,9 @@ impl Modem {
     #[allow(dead_code)] // Suppress warnings for methods used in lte.rs
     pub async fn mqtt_open_connection(&mut self) -> Result<(), ModemError> {
         info!("[modem] Closing MQTT connection");
-        self.client
-            .send(&MqttClose { tcp_connect_id: 0 })
-            .await
-            .map_err(|e| {
-                error!("[modem] Failed to open MQTT connection: {e:?}");
-                ModemError::MqttConnection
-            })?;
+        if let Err(e) = self.client.send(&MqttClose { tcp_connect_id: 0 }).await {
+            warn!("[modem] No MQTT connection to close: {e:?}");
+        }
         info!("[modem] Opening MQTT connection");
         self.open_mqtt_connection_internal().await.map_err(|e| {
             error!("[modem] Failed to open MQTT connection: {e:?}");
@@ -995,87 +1109,53 @@ impl Modem {
     ) -> Result<(), ModemError> {
         // --- GPS Data ---
 
-        let trip_topic: heapless::String<128> = heapless::String::new();
-        let mut trip_payload: heapless::String<1024> = heapless::String::new();
-        let mut buf: [u8; 1024] = [0u8; 1024];
+        // let trip_topic: heapless::String<128> = heapless::String::new();
+        // let mut trip_payload: heapless::String<1024> = heapless::String::new();
+        // let mut buf: [u8; 1024] = [0u8; 1024];
 
-        let trip_result = self.client.send(&RetrieveGpsRmc).await;
+        // let trip_result = self.client.send(&RetrieveGpsRmc).await;
 
-        match trip_result {
-            Ok(res) => {
-                info!("[modem] GPS RMC data received: {res:?}");
+        // match trip_result {
+        //     Ok(res) => {
+        //         info!("[modem] GPS RMC data received: {res:?}");
 
-                let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
-                let mut device_id = heapless::String::new();
-                let mut trip_id = heapless::String::new();
-                write!(&mut trip_id, "{mqtt_client_id}").unwrap();
-                write!(&mut device_id, "{mqtt_client_id}").unwrap();
+        // let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
+        let mut device_id = heapless::String::new();
+        let mut trip_id = heapless::String::new();
 
-                let trip_data = TripData {
-                    device_id,
-                    trip_id,
-                    latitude: ((res.latitude as u64 / 100) as f64)
-                        + ((res.latitude % 100.0f64) / 60.0f64),
-                    longitude: ((res.longitude as u64 / 100) as f64)
-                        + ((res.longitude % 100.0f64) / 60.0f64),
-                    timestamp,
-                };
-
-                // Hardcoded test data
-                // let trip_data = TripData {
-                //     device_id,
-                //     trip_id,
-                //     latitude: 60.0f64,
-                //     longitude: 60.0f64,
-                //     timestamp: 12u64,
-                // };
-
-                if gps_channel.try_send(trip_data.clone()).is_err() {
-                    error!("[modem] Failed to send TripData to channel");
-                } else {
-                    info!("[modem] GPS data sent to channel: {trip_data:?}");
-                }
-
-                // Serialize to JSON
-                if let Ok(len) = serde_json_core::to_slice(&trip_data, &mut buf) {
-                    let json = core::str::from_utf8(&buf[..len])
-                        .unwrap_or_default()
-                        .replace('\"', "'");
-
-                    if trip_payload.push_str(&json).is_err() {
-                        error!("[modem] Payload buffer overflow");
-                        return Err(ModemError::Command);
-                    }
-
-                    info!("[modem] MQTT payload (GPS/trip): {trip_payload}");
-                    if check_result(
-                        self.client
-                            .send(&MqttPublishExtended {
-                                tcp_connect_id: 0,
-                                msg_id: 0,
-                                qos: 0,
-                                retain: 0,
-                                topic: trip_topic,
-                                payload: trip_payload,
-                            })
-                            .await,
-                    ) {
-                        info!("[modem] Trip data published successfully");
-                        Ok(())
-                    } else {
-                        error!("[modem] Failed to publish trip data");
-                        Err(ModemError::Command)
-                    }
-                } else {
-                    error!("[modem] Failed to serialize trip/GPS data");
-                    Err(ModemError::Command)
-                }
-            }
-            Err(e) => {
-                warn!("[modem] Failed to retrieve GPS data: {e:?}");
-                Err(ModemError::Command)
-            }
+        if write!(&mut trip_id, "{mqtt_client_id}").is_err() {
+            error!("[modem] Failed to write trip_id string");
+            return Err(ModemError::Command);
         }
+        if write!(&mut device_id, "{mqtt_client_id}").is_err() {
+            error!("[modem] Failed to write client_id string");
+            return Err(ModemError::Command);
+        };
+
+        // let trip_data = TripData {
+        //     device_id,
+        //     trip_id,
+        //     latitude: ((res.latitude as u64 / 100) as f64) + ((res.latitude % 100.0f64) / 60.0f64),
+        //     longitude: ((res.longitude as u64 / 100) as f64)
+        //         + ((res.longitude % 100.0f64) / 60.0f64),
+        //     timestamp,
+        // };
+
+        // Hardcoded test data
+        let trip_data = TripData {
+            device_id,
+            trip_id,
+            latitude: 60.0f64,
+            longitude: 60.0f64,
+            timestamp: 12u64,
+        };
+
+        if gps_channel.try_send(trip_data.clone()).is_err() {
+            error!("[modem] Failed to send TripData to channel");
+        } else {
+            info!("[modem] GPS data sent to channel: {trip_data:?}");
+        }
+        Ok(()) // for testing
     }
 }
 

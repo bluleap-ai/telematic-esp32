@@ -4,20 +4,14 @@
 // Declare modules at the crate root
 mod cfg;
 mod hal;
+mod modem;
 mod net;
 mod task;
 mod util;
-
 // Import the necessary modules
 //use crate::hal::flash;
+use crate::cfg::net_cfg::*;
 use crate::net::atcmd::Urc;
-use task::can::*;
-use task::lte::*;
-use task::mqtt::*;
-#[cfg(feature = "ota")]
-use task::ota::ota_handler;
-use task::wifi::*;
-
 // Import the necessary modules
 use atat::{ResponseSlot, UrcChannel};
 use embassy_executor::Spawner;
@@ -32,19 +26,25 @@ use esp_backtrace as _;
 use esp_hal::rtc_cntl::{Rtc, RwdtStage};
 use esp_hal::{
     clock::CpuClock,
-    gpio::Output,
+    gpio::{Level, Output, OutputConfig},
     rng::Trng,
     timer::timg::TimerGroup,
     twai::{self, TwaiMode},
-    uart::{Config, Uart},
+    uart::{Config, RxConfig, Uart},
 };
-use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
-use log::info;
+use esp_wifi::{init, EspWifiController, InitializationError};
+use log::{error, info};
+use modem::*;
 use static_cell::StaticCell;
-use task::lte::TripData;
+use task::can::*;
+use task::lte::*;
+use task::mqtt::*;
 use task::netmgr::net_manager_task;
+#[cfg(feature = "ota")]
+use task::ota::ota_handler;
+use task::wifi::*;
 pub type GpsOutbox = Channel<NoopRawMutex, TripData, 8>;
-static GPS_CHANNEL: StaticCell<GpsOutbox> = StaticCell::new();
+
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
         static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
@@ -56,29 +56,88 @@ macro_rules! mk_static {
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) -> ! {
+    // Init logging system
     esp_println::logger::init_logger_from_env();
+
+    // Init peripherals
     let peripherals = esp_hal::init({
-        let mut config = esp_hal::Config::default();
-        config.cpu_clock = CpuClock::max();
+        let config = esp_hal::Config::default();
+        let _ = config.with_cpu_clock(CpuClock::max());
         config
     });
+
     info!("Telematic started");
-    esp_alloc::heap_allocator!(200 * 1024);
+    esp_alloc::heap_allocator!(size: 200 * 1024);
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     esp_hal_embassy::init(timg1.timer0);
+    // Init True Random Number Generator
     let trng = &mut *mk_static!(Trng<'static>, Trng::new(peripherals.RNG, peripherals.ADC1));
-    //let trng = &*mk_static!(
-    //    Mutex<Trng<'static>, EspWifiController<'static>>,
-    //    Mutex::new(Trng::new(peripherals.RNG, peripherals.ADC1))
-    //);
+
+    // Init EspWifiController
     let init = &*mk_static!(
         EspWifiController<'static>,
-        init(timg0.timer0, trng.rng, peripherals.RADIO_CLK).unwrap()
+        match init(timg0.timer0, trng.rng, peripherals.RADIO_CLK) {
+            Ok(controller) => controller,
+            Err(e) => {
+                // Log specific error details based on the error type
+                match e {
+                    InitializationError::WrongClockConfig => {
+                        error!("Failed to initialize WiFi - WrongClockConfig");
+                    }
+                    InitializationError::WifiError(wifi_err) => {
+                        error!("Failed to initialize WiFi - WifiError: {wifi_err:?}");
+                    }
+                    InitializationError::General(code) => {
+                        error!("Failed to initialize WiFi - General: {code:?}");
+                    }
+                    InitializationError::InterruptsDisabled => {
+                        error!("Failed to initialize WiFi - Interrupts are disabled");
+                    }
+                    _ => todo!(),
+                }
+
+                // Wifi is a critical component (could replace the panic! with the code to reset later)
+                panic!("WiFi initialization failure");
+            }
+        }
     );
+
+    // Create Wifi interface
     let wifi = peripherals.WIFI;
-    let (wifi_interface, controller) =
-        esp_wifi::wifi::new_with_mode(init, wifi, WifiStaDevice).unwrap();
+    let (controller, wifi_interface) = match esp_wifi::wifi::new(init, wifi) {
+        Ok(val) => val,
+        Err(e) => {
+            match e {
+                esp_wifi::wifi::WifiError::NotInitialized => {
+                    error!(" Wi-Fi module is not initialized or not initialized for `Wi-Fi` - NotInitialized");
+                }
+                esp_wifi::wifi::WifiError::InternalError(internal_err) => {
+                    error!("Internal Wi-Fi error: {internal_err:?}");
+                }
+                esp_wifi::wifi::WifiError::Disconnected => {
+                    error!("The device disconnected from the network or failed to connect to it - Disconnected");
+                }
+                esp_wifi::wifi::WifiError::UnknownWifiMode => {
+                    error!("Unknown Wi-Fi mode (not Sta/Ap/ApSta) - UnknowWifiMode");
+                }
+                esp_wifi::wifi::WifiError::Unsupported => {
+                    error!("Unsupported operation or mode - Unsupported");
+                }
+                esp_wifi::wifi::WifiError::InvalidArguments => {
+                    error!("Invalid arguments provided to Wi-Fi function");
+                }
+                _ => todo!(),
+            }
+            // Could replace panic! with the code to reset process
+            panic!("Fail to create Wifi interface");
+        }
+    };
+
+    // Configure network stack for DHCP
+    // modified: new_with_mode -> new, change position of wifi_interface and controller
+    // let (controller, wifi_interface) = esp_wifi::wifi::new(init, wifi).unwrap();
+
     let config = embassy_net::Config::dhcpv4(Default::default());
     #[cfg(feature = "wdg")]
     let mut rtc = {
@@ -89,27 +148,31 @@ async fn main(spawner: Spawner) -> ! {
     };
 
     let seed = 1234;
-
+    // modified: wifi_interface is a interface, not a WifiDevice, add ".sta" to get Device
     let (stack, runner) = embassy_net::new(
-        wifi_interface,
+        wifi_interface.sta,
         config,
         mk_static!(StackResources<3>, StackResources::<3>::new()),
         seed,
     );
     let stack = &*mk_static!(Stack, stack);
 
+    // ==============================
+    // === LTE UART + Quectel ===
+    // ==============================
     let uart_tx_pin = peripherals.GPIO23;
     let uart_rx_pin = peripherals.GPIO15;
-    let quectel_pen_pin = Output::new(peripherals.GPIO21, esp_hal::gpio::Level::High);
-    let quectel_dtr_pin = Output::new(peripherals.GPIO22, esp_hal::gpio::Level::High);
+    let pen_pin = Output::new(peripherals.GPIO21, Level::High, OutputConfig::default());
+    let dtr_pin = Output::new(peripherals.GPIO22, Level::High, OutputConfig::default());
 
-    let config = Config::default().with_rx_fifo_full_threshold(64);
+    let config = Config::default().with_rx(RxConfig::default().with_fifo_full_threshold(64));
     let uart0 = Uart::new(peripherals.UART0, config)
-        .unwrap()
+        .expect("Fail to initialize UART0")
         .with_rx(uart_rx_pin)
         .with_tx(uart_tx_pin)
         .into_async();
     let (uart_rx, uart_tx) = uart0.split();
+
     static RES_SLOT: ResponseSlot<1024> = ResponseSlot::new();
     static URC_CHANNEL: UrcChannel<Urc, 128, 3> = UrcChannel::new();
     static INGRESS_BUF: StaticCell<[u8; 1024]> = StaticCell::new();
@@ -127,6 +190,9 @@ async fn main(spawner: Spawner) -> ! {
         atat::Config::default(),
     );
 
+    // ==============================
+    // === CAN / MQTT ===
+    // ==============================
     let can_tx_pin = peripherals.GPIO1;
     let can_rx_pin = peripherals.GPIO10;
     const CAN_BAUDRATE: twai::BaudRate = twai::BaudRate::B250K;
@@ -142,32 +208,55 @@ async fn main(spawner: Spawner) -> ! {
         const { twai::filter::SingleExtendedFilter::new(b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxx", b"x") },
     );
     let can = twai_config.start();
-    static CHANNEL: StaticCell<TwaiOutbox> = StaticCell::new();
-    let channel = &*CHANNEL.init(Channel::new());
+    static CAN_CHANNEL: StaticCell<TwaiOutbox> = StaticCell::new();
+    static GPS_CHANNEL: StaticCell<GpsOutbox> = StaticCell::new();
+    let can_channel = &*CAN_CHANNEL.init(Channel::new());
     let (can_rx, _can_tx) = can.split();
 
     let gps_channel = &*GPS_CHANNEL.init(Channel::new());
-    spawner.spawn(can_receiver(can_rx, channel)).ok();
+    spawner.spawn(can_receiver(can_rx, can_channel)).ok();
     spawner.spawn(connection(controller)).ok();
     spawner.spawn(net_task(runner)).ok();
     spawner
-        .spawn(mqtt_handler(
+        .spawn(wifi_mqtt_handler(
             stack,
-            channel,
+            can_channel,
             gps_channel,
             peripherals.SHA,
             peripherals.RSA,
         ))
         .ok();
-    spawner.spawn(quectel_rx_handler(ingress, uart_rx)).ok();
+
+    // ====================================
+    // === Spawn RX handler Quectel ===
+    // ====================================
+    spawner.spawn(modem_rx_handler(ingress, uart_rx)).ok();
+
+    // ====================================
+    // === Quectel flow API driver ===
+    // ====================================
+
+    let quectel = Modem::new(
+        client,
+        pen_pin,
+        dtr_pin,
+        &URC_CHANNEL,
+        ModemModel::QuectelEG800k,
+    );
+    let ca_chain = include_str!("../certs/ca.crt").as_bytes();
+    let certificate = include_str!("../certs/dvt.crt").as_bytes();
+    let private_key = include_str!("../certs/dvt.key").as_bytes();
+
+    // Handle spawner.spawn Result
     spawner
-        .spawn(quectel_tx_handler(
-            client,
-            quectel_pen_pin,
-            quectel_dtr_pin,
-            &URC_CHANNEL,
+        .spawn(lte_mqtt_handler_fsm(
+            MQTT_CLIENT_ID,
+            quectel,
+            can_channel,
             gps_channel,
-            channel,
+            ca_chain,
+            certificate,
+            private_key,
         ))
         .ok();
 

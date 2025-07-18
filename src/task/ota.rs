@@ -144,7 +144,11 @@ pub async fn ota_handler(
 
     let identity = {
         let mut store = KeyStore::new();
-        store.set_item("mac", &mac_str).unwrap();
+        // Set MAC address as device identity - should never fail with a valid MAC
+        if let Err(e) = store.set_item("mac", &mac_str) {
+            log_error!("[OTA] Failed to set MAC address in identity store: {e:?}");
+            panic!("Cannot create device identity without MAC address");
+        };
         store
     };
 
@@ -213,7 +217,11 @@ pub async fn ota_handler(
 
     let mut keystore = KeyStore::new();
     for item in &inventory {
-        keystore.set_item(&item.name, &item.value).unwrap();
+        // Store each key in inventory - failure here indicates a serious memory issues
+        if let Err(e) = keystore.set_item(&item.name, &item.value) {
+            log_error!("[OTA] Failed to add inventory item '{item.name}': {e:?}");
+            panic!("Cannot create device inventory");
+        }
     }
     // Set the inventory
     match mender_inventory::mender_inventory_set(&keystore).await {

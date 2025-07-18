@@ -1,14 +1,15 @@
-/// Days per month for non-leap and leap years
+#[allow(dead_code)]
 const DAYS_IN_MONTH: [[u16; 12]; 2] = [
     [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31], // Normal year
     [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31], // Leap year
 ];
 
+#[allow(dead_code)]
 /// Check if a year is a leap year
 const fn is_leap_year(year: u16) -> bool {
     year.is_multiple_of(4) && !year.is_multiple_of(100) || year.is_multiple_of(400)
 }
-
+#[allow(dead_code)]
 /// Convert UTC and date to UNIX timestamp
 pub fn utc_date_to_unix_timestamp(utc: &[u8], date: &[u8]) -> u64 {
     let day = (date[0] - b'0') as u16 * 10 + (date[1] - b'0') as u16;
