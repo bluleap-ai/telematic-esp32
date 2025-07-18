@@ -30,18 +30,21 @@ use esp32_mender_client::mender_mcu_client::{
 use esp32_mender_client::{log_debug, log_error, log_info, log_warn};
 
 // Example usage:
+#[allow(dead_code)] // Suppress unused method warnings
 fn network_connect_cb() -> MenderResult<()> {
     log_info!("network_connect_cb");
     // Implementation
     Ok((MenderStatus::Ok, ()))
 }
 
+#[allow(dead_code)] // Suppress unused method warnings
 fn network_release_cb() -> MenderResult<()> {
     log_info!("network_release_cb");
     // Implementation
     Ok((MenderStatus::Ok, ()))
 }
 
+#[allow(dead_code)] // Suppress unused method warnings
 fn authentication_success_cb() -> MenderResult<()> {
     log_info!("authentication_success_cb");
 
@@ -55,6 +58,7 @@ fn authentication_success_cb() -> MenderResult<()> {
     Ok((MenderStatus::Ok, ()))
 }
 
+#[allow(dead_code)] // Suppress unused method warnings
 fn authentication_failure_cb() -> MenderResult<()> {
     log_info!("authentication_failure_cb");
 
@@ -65,6 +69,7 @@ fn authentication_failure_cb() -> MenderResult<()> {
     Ok((MenderStatus::Ok, ()))
 }
 
+#[allow(dead_code)] // Suppress unused method warnings
 fn deployment_status_cb(status: DeploymentStatus, message: Option<&str>) -> MenderResult<()> {
     log_info!(
         "deployment_status_cb, status: {}, message: {}",
@@ -75,6 +80,7 @@ fn deployment_status_cb(status: DeploymentStatus, message: Option<&str>) -> Mend
     Ok((MenderStatus::Ok, ()))
 }
 
+#[allow(dead_code)] // Suppress unused method warnings
 fn restart_cb() -> MenderResult<()> {
     log_info!("restart_cb");
 
@@ -84,6 +90,7 @@ fn restart_cb() -> MenderResult<()> {
 }
 
 // Make the config static
+#[allow(dead_code)] // Suppress unused method warnings
 static INVENTORY_CONFIG: MenderInventoryConfig = MenderInventoryConfig {
     refresh_interval: 0,
 };

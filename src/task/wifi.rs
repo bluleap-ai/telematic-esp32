@@ -1,13 +1,11 @@
+use crate::cfg::net_cfg::{WIFI_PSWD, WIFI_SSID};
 use embassy_net::Runner;
 use embassy_time::{Duration, Timer};
+use esp_wifi::wifi::WifiState;
 use esp_wifi::wifi::{
     ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiStaDevice,
-    WifiState,
 };
 use log::{error, info, warn};
-
-use crate::cfg::net_cfg::{WIFI_PSWD, WIFI_SSID};
-
 #[embassy_executor::task]
 pub async fn connection(mut controller: WifiController<'static>) {
     info!("[WiFi] Connection task started");

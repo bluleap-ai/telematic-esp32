@@ -8,8 +8,10 @@ use esp_mbedtls::{asynch::Session, Certificates, Mode, Tls, TlsVersion, X509};
 // use esp_println::println;
 use log::{error, info, warn};
 
-use crate::task::lte::TripData;
+// use crate::task::lte::TripData;
 use embassy_sync::channel::Channel;
+
+use crate::modem::*;
 
 use crate::cfg::net_cfg::*;
 use crate::net::{dns::DnsBuilder, mqtt::MqttClient};
@@ -24,13 +26,13 @@ static IS_WIFI: AtomicBool = AtomicBool::new(false);
 
 #[allow(clippy::uninlined_format_args)]
 #[embassy_executor::task]
-pub async fn mqtt_handler(
+pub async fn wifi_mqtt_handler(
     stack: &'static Stack<'static>,
     can_channel: &'static TwaiOutbox,
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
     mut sha: SHA,
     mut rsa: RSA,
-) {
+) -> ! {
     loop {
         if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_NET.receiver().try_receive() {
             IS_WIFI.store(
@@ -46,6 +48,7 @@ pub async fn mqtt_handler(
             continue;
         }
 
+        info!("[WIFI] Using WIFI connection");
         // Ensure the stack is connected
         if !stack.is_link_up() {
             Timer::after(Duration::from_millis(500)).await;
@@ -73,10 +76,10 @@ pub async fn mqtt_handler(
         }
 
         let certificates = Certificates {
-            ca_chain: X509::pem(concat!(include_str!("../../cert/crt.pem"), "\0").as_bytes()).ok(),
-            certificate: X509::pem(concat!(include_str!("../../cert/dvt.crt"), "\0").as_bytes())
+            ca_chain: X509::pem(concat!(include_str!("../../certs/crt.pem"), "\0").as_bytes()).ok(),
+            certificate: X509::pem(concat!(include_str!("../../certs/dvt.crt"), "\0").as_bytes())
                 .ok(),
-            private_key: X509::pem(concat!(include_str!("../../cert/dvt.key"), "\0").as_bytes())
+            private_key: X509::pem(concat!(include_str!("../../certs/dvt.key"), "\0").as_bytes())
                 .ok(),
             password: None,
         };
@@ -179,7 +182,7 @@ pub async fn mqtt_handler(
                     error!("[WIFI] Failed to publish MQTT packet: {e:?}");
                     break;
                 }
-                info!("[WIFI] MQTT GPS sent OK {trip_str}");
+                info!("[WIFI] MQTT GPS sent OK");
             }
 
             mqtt_client.poll().await;
