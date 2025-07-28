@@ -2,6 +2,10 @@
 runner = "espflash flash --monitor --flash-size 8mb --partition-table ./partitions.csv --erase-parts otadata"
 
 [env]
+# CC and AR environment variables must be set to the appropriate paths for your system.
+# CC = "C:\\path\\to\\your\\espressif\\toolchain\\bin\\riscv32-esp-elf-gcc"
+# AR = "C:\\path\\to\\your\\espressif\\toolchain\\bin\\riscv32-esp-elf-ar"
+
 ESP_LOG = "INFO"
 ESP_DEVICE_TYPE="esp32c6"
 ESP_DEVICE_NAME="esp32c6-example"

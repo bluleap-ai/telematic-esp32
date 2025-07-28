@@ -1,9 +1,11 @@
 // Import core macros needed by Serde in no_std environment
 use core::marker::PhantomData;
 use embassy_time::{Duration, Timer};
-use esp_hal::gpio::Output;
-use esp_hal::spi::master::Spi;
-use esp_hal::Blocking;
+use esp_hal::{
+    gpio::Output,
+    spi::master::{Config, Spi},
+    Blocking,
+};
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
@@ -109,7 +111,7 @@ impl<'d> W25Q128FVSG<'d> {
         self.cs.set_low();
         // Send command
         self.spi
-            .write_bytes(&[SpiCommand::ReadJedecId as u8])
+            .write(&[SpiCommand::ReadJedecId as u8])
             .map_err(|_| ExFlashError::SpiError)?;
         // Read 3 bytes of ID
         self.spi
@@ -126,7 +128,7 @@ impl<'d> W25Q128FVSG<'d> {
 
         self.cs.set_low();
         self.spi
-            .write_bytes(&[SpiCommand::ReadStatusReg1 as u8])
+            .write(&[SpiCommand::ReadStatusReg1 as u8])
             .map_err(|_| ExFlashError::SpiError)?;
         self.spi
             .transfer(&mut status)
@@ -160,7 +162,7 @@ impl<'d> W25Q128FVSG<'d> {
     pub async fn write_enable(&mut self) -> Result<(), ExFlashError> {
         self.cs.set_low();
         self.spi
-            .write_bytes(&[SpiCommand::WriteEnable as u8])
+            .write(&[SpiCommand::WriteEnable as u8])
             .map_err(|_| ExFlashError::SpiError)?;
         self.cs.set_high();
 
@@ -178,7 +180,7 @@ impl<'d> W25Q128FVSG<'d> {
     pub fn write_disable(&mut self) -> Result<(), ExFlashError> {
         self.cs.set_low();
         self.spi
-            .write_bytes(&[SpiCommand::WriteDisable as u8])
+            .write(&[SpiCommand::WriteDisable as u8])
             .map_err(|_| ExFlashError::SpiError)?;
         self.cs.set_high();
         Ok(())
@@ -203,7 +205,7 @@ impl<'d> W25Q128FVSG<'d> {
         self.cs.set_low();
         // Send command and address
         self.spi
-            .write_bytes(&command)
+            .write(&command)
             .map_err(|_| ExFlashError::SpiError)?;
         // Read data
         self.spi
@@ -234,7 +236,7 @@ impl<'d> W25Q128FVSG<'d> {
         self.cs.set_low();
         // Send command, address, and dummy byte
         self.spi
-            .write_bytes(&command)
+            .write(&command)
             .map_err(|_| ExFlashError::SpiError)?;
         // Read data
         self.spi
@@ -278,12 +280,10 @@ impl<'d> W25Q128FVSG<'d> {
         self.cs.set_low();
         // Send command and address
         self.spi
-            .write_bytes(&command)
+            .write(&command)
             .map_err(|_| ExFlashError::SpiError)?;
         // Send data
-        self.spi
-            .write_bytes(data)
-            .map_err(|_| ExFlashError::SpiError)?;
+        self.spi.write(data).map_err(|_| ExFlashError::SpiError)?;
         self.cs.set_high();
 
         // Wait for programming to complete
@@ -309,7 +309,7 @@ impl<'d> W25Q128FVSG<'d> {
 
         self.cs.set_low();
         self.spi
-            .write_bytes(&command)
+            .write(&command)
             .map_err(|_| ExFlashError::SpiError)?;
         self.cs.set_high();
 
@@ -336,7 +336,7 @@ impl<'d> W25Q128FVSG<'d> {
 
         self.cs.set_low();
         self.spi
-            .write_bytes(&command)
+            .write(&command)
             .map_err(|_| ExFlashError::SpiError)?;
         self.cs.set_high();
 
@@ -363,7 +363,7 @@ impl<'d> W25Q128FVSG<'d> {
 
         self.cs.set_low();
         self.spi
-            .write_bytes(&command)
+            .write(&command)
             .map_err(|_| ExFlashError::SpiError)?;
         self.cs.set_high();
 
@@ -379,7 +379,7 @@ impl<'d> W25Q128FVSG<'d> {
 
         self.cs.set_low();
         self.spi
-            .write_bytes(&[SpiCommand::ChipErase as u8])
+            .write(&[SpiCommand::ChipErase as u8])
             .map_err(|_| ExFlashError::SpiError)?;
         self.cs.set_high();
 
@@ -392,7 +392,7 @@ impl<'d> W25Q128FVSG<'d> {
     pub fn power_down(&mut self) -> Result<(), ExFlashError> {
         self.cs.set_low();
         self.spi
-            .write_bytes(&[SpiCommand::PowerDown as u8])
+            .write(&[SpiCommand::PowerDown as u8])
             .map_err(|_| ExFlashError::SpiError)?;
         self.cs.set_high();
         Ok(())
@@ -402,7 +402,7 @@ impl<'d> W25Q128FVSG<'d> {
     pub fn release_power_down(&mut self) -> Result<(), ExFlashError> {
         self.cs.set_low();
         self.spi
-            .write_bytes(&[SpiCommand::ReleasePowerDown as u8])
+            .write(&[SpiCommand::ReleasePowerDown as u8])
             .map_err(|_| ExFlashError::SpiError)?;
         self.cs.set_high();
         Ok(())
@@ -413,14 +413,14 @@ impl<'d> W25Q128FVSG<'d> {
         // Enable reset
         self.cs.set_low();
         self.spi
-            .write_bytes(&[SpiCommand::EnableReset as u8])
+            .write(&[SpiCommand::EnableReset as u8])
             .map_err(|_| ExFlashError::SpiError)?;
         self.cs.set_high();
 
         // Reset device
         self.cs.set_low();
         self.spi
-            .write_bytes(&[SpiCommand::ResetDevice as u8])
+            .write(&[SpiCommand::ResetDevice as u8])
             .map_err(|_| ExFlashError::SpiError)?;
         self.cs.set_high();
 

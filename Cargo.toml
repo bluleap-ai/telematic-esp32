@@ -17,14 +17,14 @@ esp-backtrace = { version = "0.15.0", features = [
     "panic-handler",
     "println",
 ] }
-esp-hal = { version = "0.23.0", features = ["esp32c6", "log"], optional = true }
-esp-hal-embassy = { version = "0.6.0", features = ["esp32c6"], optional = true }
-esp-alloc = { version = "0.6.0" }
+esp-hal = { version = "1.0.0-beta.1", features = ["esp32c6", "unstable"] , optional = true}
+esp-hal-embassy = { version = "0.8.1", features = ["esp32c6"], optional = true }
+esp-alloc = { version = "0.8.0" }
 esp-storage = { version = "0.4.0", features = ["esp32c6"], optional = true }
 
 # Embassy framework
 embassy-executor = { version = "0.7.0", features = ["task-arena-size-131072"] }
-embassy-net = { version = "0.6.0", features = [
+embassy-net = { version = "0.7.0", features = [
     "tcp",
     "udp",
     "dhcpv4",
@@ -35,7 +35,7 @@ embassy-sync = "0.6.1"
 embassy-futures = "0.1.1"
 # ESP32 specific
 esp-println = { version = "0.13.0", features = ["esp32c6", "log"] }
-esp-wifi = { version = "0.12.0", features = ["esp32c6", "wifi"] }
+esp-wifi = { version = "0.14.1", features = ["esp32c6", "wifi"] }
 
 # OTA
 esp32-mender-client = { git = "https://github.com/virust-ai/esp32-mender-client", branch = "main", features = [
@@ -45,7 +45,7 @@ esp32-mender-client = { git = "https://github.com/virust-ai/esp32-mender-client"
 # Other dependencies
 embedded-can = "0.4.1"
 log = { version = "0.4.16" }
-esp-mbedtls = { git = "https://github.com/TuEmb/esp-mbedtls.git", branch = "esp32c6_support", features = [
+esp-mbedtls = { git = "https://github.com/esp-rs/esp-mbedtls", rev = "9b89f52", features = [
     "esp32c6",
 ] }
 atat = { git = "https://github.com/TuEmb/atat.git", rev = "67eb38b3b2cdbd1a5f68f536517a8f24d3fcba01" }

@@ -8,14 +8,14 @@ mod ex_flash;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
-use esp_hal::time::RateExtU32;
 use esp_hal::{
     clock::CpuClock,
-    gpio::Output,
+    gpio::{Level, Output, OutputConfig},
     spi::{
         master::{Config, Spi},
         Mode,
     },
+    time::Rate,
     timer::timg::TimerGroup,
 };
 use ex_flash::{ExFlashError, W25Q128FVSG};
@@ -254,12 +254,11 @@ async fn main(_spawner: Spawner) -> ! {
     info!("=== Flash File System Test Starting ===");
 
     let peripherals = esp_hal::init({
-        let mut config = esp_hal::Config::default();
-        config.cpu_clock = CpuClock::max();
-        config
+        let config = esp_hal::Config::default();
+        config.with_cpu_clock(CpuClock::max())
     });
 
-    esp_alloc::heap_allocator!(200 * 1024);
+    esp_alloc::heap_allocator!(size: 200 * 1024);
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     esp_hal_embassy::init(timg1.timer0);
 
@@ -267,11 +266,11 @@ async fn main(_spawner: Spawner) -> ! {
     let sclk = peripherals.GPIO18;
     let miso = peripherals.GPIO20;
     let mosi = peripherals.GPIO19;
-    let cs = Output::new(peripherals.GPIO3, esp_hal::gpio::Level::High);
+    let cs = Output::new(peripherals.GPIO3, Level::High, OutputConfig::default());
     let spi = Spi::new(
         peripherals.SPI2,
         Config::default()
-            .with_frequency(100u32.kHz())
+            .with_frequency(Rate::from_khz(100u32))
             .with_mode(Mode::_0),
     )
     .unwrap()

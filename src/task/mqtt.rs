@@ -28,9 +28,10 @@ pub async fn mqtt_handler(
     stack: &'static Stack<'static>,
     can_channel: &'static TwaiOutbox,
     gps_channel: &'static Channel<NoopRawMutex, TripData, 8>,
-    mut sha: SHA,
-    mut rsa: RSA,
+    sha: SHA<'static>,
+    rsa: RSA<'static>,
 ) {
+    let tls = Tls::new(sha).unwrap().with_hardware_rsa(rsa);
     loop {
         if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_NET.receiver().try_receive() {
             IS_WIFI.store(
@@ -81,7 +82,6 @@ pub async fn mqtt_handler(
             password: None,
         };
 
-        let tls = Tls::new(&mut sha).unwrap().with_hardware_rsa(&mut rsa);
         let session = match Session::new(
             socket,
             Mode::Client {

@@ -77,10 +77,7 @@ fn deployment_status_cb(status: DeploymentStatus, message: Option<&str>) -> Mend
 
 fn restart_cb() -> MenderResult<()> {
     log_info!("restart_cb");
-
-    esp_hal::reset::software_reset();
-
-    Ok((MenderStatus::Ok, ()))
+    esp_hal::system::software_reset();
 }
 
 // Make the config static

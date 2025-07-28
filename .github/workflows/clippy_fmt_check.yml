@@ -39,6 +39,39 @@ jobs:
           rustup target add riscv32imac-unknown-none-elf
         shell: bash
 
+      - name: Install ESP32 toolchain
+        run: |
+          # Create base directory
+          mkdir -p $HOME/.espressif/tools
+
+          # Download latest toolchain
+          cd $HOME/.espressif/tools
+          wget https://github.com/espressif/crosstool-NG/releases/download/esp-14.2.0_20240906/riscv32-esp-elf-14.2.0_20240906-x86_64-linux-gnu.tar.gz
+
+          # Extract toolchain
+          tar -xzf riscv32-esp-elf-14.2.0_20240906-x86_64-linux-gnu.tar.gz
+
+          # Find the bin directory
+          BIN_DIR=$(find $HOME/.espressif/tools -name "riscv32-esp-elf-gcc" -type f | xargs dirname)
+          
+          # Add to PATH      
+          echo "PATH=$BIN_DIR:$PATH" >> $GITHUB_ENV
+
+
+      # Set environment variables for ESP32-C6 toolchain
+      - name: Set ESP toolchain environment variables
+        run: |
+          GCC_PATH=$(find $HOME/.espressif/tools -name "riscv32-esp-elf-gcc" -type f)
+          AR_PATH=$(find $HOME/.espressif/tools -name "riscv32-esp-elf-ar" -type f)
+          
+          echo "CC=$GCC_PATH" >> $GITHUB_ENV
+          echo "AR=$AR_PATH" >> $GITHUB_ENV
+                    
+          # Print paths for debugging
+          echo "Found ESP32-C6 GCC at: $GCC_PATH"
+          echo "Found ESP32-C6 AR at: $AR_PATH"
+
+
       - name: Rustfmt
         run: cargo fmt --all -- --check
         continue-on-error: true
