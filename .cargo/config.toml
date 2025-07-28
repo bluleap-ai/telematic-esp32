@@ -3,11 +3,8 @@ runner = "espflash flash --monitor --flash-size 8mb --partition-table ./partitio
 
 [env]
 # CC and AR environment variables must be set to the appropriate paths for your system.
-CC = "C:\\path\\to\\your\\espressif\\toolchain\\bin\\riscv32-esp-elf-gcc"
-AR = "C:\\path\\to\\your\\espressif\\toolchain\\bin\\riscv32-esp-elf-ar"
-# For example:
-# CC = "<your path>\\.espressif\\tools\\riscv32-esp-elf\\esp-13.2.0_20240530\\riscv32-esp-elf\\bin\\riscv32-esp-elf-gcc"
-# AR = "<your path>\\.espressif\\tools\\riscv32-esp-elf\\esp-13.2.0_20240530\\riscv32-esp-elf\\bin\\riscv32-esp-elf-ar"
+# CC = "C:\\path\\to\\your\\espressif\\toolchain\\bin\\riscv32-esp-elf-gcc"
+# AR = "C:\\path\\to\\your\\espressif\\toolchain\\bin\\riscv32-esp-elf-ar"
 
 ESP_LOG = "INFO"
 ESP_DEVICE_TYPE="esp32c6"
