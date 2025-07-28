@@ -45,7 +45,7 @@ esp32-mender-client = { git = "https://github.com/virust-ai/esp32-mender-client"
 # Other dependencies
 embedded-can = "0.4.1"
 log = { version = "0.4.16" }
-esp-mbedtls = { git = "https://github.com/esp-rs/esp-mbedtls", branch = "main", features = [
+esp-mbedtls = { git = "https://github.com/esp-rs/esp-mbedtls", rev = "9b89f52", features = [
     "esp32c6",
 ] }
 atat = { git = "https://github.com/TuEmb/atat.git", rev = "67eb38b3b2cdbd1a5f68f536517a8f24d3fcba01" }
