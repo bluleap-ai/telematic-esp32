@@ -2,17 +2,8 @@
 use core::marker::PhantomData;
 use embassy_time::{Duration, Timer};
 use esp_hal::{
-    clock::CpuClock,
-    gpio::{Level, Output, OutputConfig},
-    rng::Trng,
-    spi::{
-        master::{Config as otherConfig, Spi},
-        Mode,
-    },
-    time::Rate,
-    timer::timg::TimerGroup,
-    twai::{self, TwaiMode},
-    uart::{Config, RxConfig, Uart},
+    gpio::Output,
+    spi::master::{Config, Spi},
     Blocking,
 };
 

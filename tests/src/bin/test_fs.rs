@@ -12,7 +12,7 @@ use esp_hal::{
     clock::CpuClock,
     gpio::{Level, Output, OutputConfig},
     spi::{
-        master::{Config as otherConfig, Spi},
+        master::{Config, Spi},
         Mode,
     },
     time::Rate,
@@ -269,7 +269,7 @@ async fn main(_spawner: Spawner) -> ! {
     let cs = Output::new(peripherals.GPIO3, Level::High, OutputConfig::default());
     let spi = Spi::new(
         peripherals.SPI2,
-        otherConfig::default()
+        Config::default()
             .with_frequency(Rate::from_khz(100u32))
             .with_mode(Mode::_0),
     )
