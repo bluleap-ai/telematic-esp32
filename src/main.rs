@@ -32,13 +32,13 @@ use esp_backtrace as _;
 use esp_hal::rtc_cntl::{Rtc, RwdtStage};
 use esp_hal::{
     clock::CpuClock,
-    gpio::Output,
+    gpio::{Level, Output, OutputConfig},
     rng::Trng,
     timer::timg::TimerGroup,
     twai::{self, TwaiMode},
-    uart::{Config, Uart},
+    uart::{Config, RxConfig, Uart},
 };
-use esp_wifi::{init, wifi::WifiStaDevice, EspWifiController};
+use esp_wifi::{init, EspWifiController};
 use log::info;
 use static_cell::StaticCell;
 use task::lte::TripData;
@@ -58,12 +58,11 @@ macro_rules! mk_static {
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
     let peripherals = esp_hal::init({
-        let mut config = esp_hal::Config::default();
-        config.cpu_clock = CpuClock::max();
-        config
+        let config = esp_hal::Config::default();
+        config.with_cpu_clock(CpuClock::max())
     });
     info!("Telematic started");
-    esp_alloc::heap_allocator!(200 * 1024);
+    esp_alloc::heap_allocator!(size: 200 * 1024);
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     esp_hal_embassy::init(timg1.timer0);
@@ -77,8 +76,7 @@ async fn main(spawner: Spawner) -> ! {
         init(timg0.timer0, trng.rng, peripherals.RADIO_CLK).unwrap()
     );
     let wifi = peripherals.WIFI;
-    let (wifi_interface, controller) =
-        esp_wifi::wifi::new_with_mode(init, wifi, WifiStaDevice).unwrap();
+    let (controller, wifi_interface) = esp_wifi::wifi::new(init, wifi).unwrap();
     let config = embassy_net::Config::dhcpv4(Default::default());
     #[cfg(feature = "wdg")]
     let mut rtc = {
@@ -91,7 +89,7 @@ async fn main(spawner: Spawner) -> ! {
     let seed = 1234;
 
     let (stack, runner) = embassy_net::new(
-        wifi_interface,
+        wifi_interface.sta,
         config,
         mk_static!(StackResources<3>, StackResources::<3>::new()),
         seed,
@@ -100,10 +98,10 @@ async fn main(spawner: Spawner) -> ! {
 
     let uart_tx_pin = peripherals.GPIO23;
     let uart_rx_pin = peripherals.GPIO15;
-    let quectel_pen_pin = Output::new(peripherals.GPIO21, esp_hal::gpio::Level::High);
-    let quectel_dtr_pin = Output::new(peripherals.GPIO22, esp_hal::gpio::Level::High);
+    let quectel_pen_pin = Output::new(peripherals.GPIO21, Level::High, OutputConfig::default());
+    let quectel_dtr_pin = Output::new(peripherals.GPIO22, Level::High, OutputConfig::default());
 
-    let config = Config::default().with_rx_fifo_full_threshold(64);
+    let config = Config::default().with_rx(RxConfig::default().with_fifo_full_threshold(64));
     let uart0 = Uart::new(peripherals.UART0, config)
         .unwrap()
         .with_rx(uart_rx_pin)

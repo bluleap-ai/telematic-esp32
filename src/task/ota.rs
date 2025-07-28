@@ -77,9 +77,8 @@ fn deployment_status_cb(status: DeploymentStatus, message: Option<&str>) -> Mend
 
 fn restart_cb() -> MenderResult<()> {
     log_info!("restart_cb");
-
-    esp_hal::reset::software_reset();
-
+    esp_hal::system::software_reset();
+    #[allow(unreachable_code)]
     Ok((MenderStatus::Ok, ()))
 }
 
