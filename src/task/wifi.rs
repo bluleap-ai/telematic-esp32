@@ -27,8 +27,8 @@ pub async fn connection(mut controller: WifiController<'static>) {
         }
         if !matches!(controller.is_started(), Ok(true)) {
             let client_config = Configuration::Client(ClientConfiguration {
-                ssid: WIFI_SSID.try_into().unwrap(),
-                password: WIFI_PSWD.try_into().unwrap(),
+                ssid: WIFI_SSID.into(),
+                password: WIFI_PSWD.into(),
                 ..Default::default()
             });
             controller.set_configuration(&client_config).unwrap();
