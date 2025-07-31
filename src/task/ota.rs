@@ -136,8 +136,7 @@ pub async fn ota_handler(
         let mut store = KeyStore::new();
         // Set MAC address as device identity - should never fail with a valid MAC
         if let Err(_e) = store.set_item("mac", &mac_str) {
-            log_error!("[OTA] Failed to set MAC address in identity store: {_e:?}");
-            panic!("Cannot create device identity without MAC address");
+            panic!("Cannot create device identity: failed to set MAC address in keystore - this is a critical system error");
         };
 
         store
@@ -209,8 +208,7 @@ pub async fn ota_handler(
     let mut keystore = KeyStore::new();
     for item in &inventory {
         if let Err(_e) = keystore.set_item(&item.name, &item.value) {
-            log_error!("[OTA] Failed to add inventory item '{item.name}': {_e:?}");
-            panic!("Cannot create device inventory");
+            panic!("Cannot create device inventory: failed to add item '{item.name}' to keystore: {_e:?}");
         }
     }
     // Set the inventory

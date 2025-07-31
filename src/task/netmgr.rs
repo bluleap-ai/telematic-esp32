@@ -149,15 +149,15 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
             if can_switch_to(&status, requested_connection) {
                 perform_net_switch(&mut status, requested_connection).await;
                 if let Err(e) = status_sender.try_send(status) {
-                    warn!("[NETMGR] Failed to send status: {e:?}");
+                    warn!("[NetMgr] Failed to send status: {e:?}");
                 }
 
                 if let Err(e) = active_net_sender.try_send(status.active) {
-                    warn!("[NETMGR] Failed to send active_net: {e:?}");
+                    warn!("[NetMgr] Failed to send active_net: {e:?}");
                 }
 
                 if let Err(e) = active_lte_sender.try_send(status.active) {
-                    warn!("[NETMGR] Failed to send active_lte: {e:?}");
+                    warn!("[NetMgr] Failed to send active_lte: {e:?}");
                 }
             } else {
                 warn!("[NetMgr] Cannot switch to {requested_connection:?} - not available");
@@ -199,7 +199,7 @@ async fn lte_health_monitor(
         // For now, we assume LTE is connected if the state is not None
         if !lte_is_connected() {
             if let Err(e) = event_sender.try_send(ConnectionEvent::LteDisconnected) {
-                warn!("[NETMGR] Failed to send LteDisconnected event: {e:?}");
+                warn!("[NetMgr] Failed to send LteDisconnected event: {e:?}");
             }
         }
     }

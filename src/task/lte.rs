@@ -826,7 +826,7 @@ pub async fn quectel_tx_handler(
                 } else {
                     if is_connected {
                         if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteUnregistered) {
-                            warn!("[LTE] Failed to send LTE Connected event: {e:?}");
+                            warn!("[LTE] Failed to send LTE Unregistered event: {e:?}");
                         }
                         is_connected = false;
                     }
@@ -859,7 +859,7 @@ pub async fn quectel_tx_handler(
                     Err(e) => {
                         error!("[Quectel] MQTT connection failed: {e:?}");
                         if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected) {
-                            warn!("[LTE] Failed to send LTE Connected event: {e:?}");
+                            warn!("[LTE] Failed to send LTE Disconnected event: {e:?}");
                         }
                         state = State::ErrorConnection;
                     }
@@ -881,7 +881,7 @@ pub async fn quectel_tx_handler(
             State::ErrorConnection => {
                 if is_connected {
                     if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected) {
-                        warn!("[LTE] Failed to send LTE Connected event: {e:?}");
+                        warn!("[LTE] Failed to send LTE Disconnected event: {e:?}");
                     }
                     is_connected = false;
                 }
