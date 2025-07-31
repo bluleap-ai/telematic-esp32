@@ -15,9 +15,9 @@ pub async fn connection(mut controller: WifiController<'static>) {
         controller.capabilities()
     );
     info!("[WiFi] Disabling power saving mode");
-    controller
-        .set_power_saving(esp_wifi::config::PowerSaveMode::None)
-        .unwrap();
+    if let Err(e) = controller.set_power_saving(esp_wifi::config::PowerSaveMode::None) {
+        warn!("[WiFi] Failed to disable power saving mode: {e:?}");
+    }
     loop {
         if esp_wifi::wifi::wifi_state() == WifiState::StaConnected {
             info!("[WiFi] Already connected. Waiting for disconnect event...");
@@ -31,7 +31,12 @@ pub async fn connection(mut controller: WifiController<'static>) {
                 password: WIFI_PSWD.into(),
                 ..Default::default()
             });
-            controller.set_configuration(&client_config).unwrap();
+            if let Err(e) = controller.set_configuration(&client_config) {
+                error!("[WiFi] Failed to set WiFi configuration: {e:?}");
+                info!("[WiFi] Retrying in 5 seconds...");
+                Timer::after(Duration::from_millis(5000)).await;
+                continue;
+            }
             info!("[WiFi] Starting WiFi STA for SSID: {WIFI_SSID}");
             if let Err(e) = controller.start_async().await {
                 warn!("[WiFi] Failed to start controller: {e:?}");

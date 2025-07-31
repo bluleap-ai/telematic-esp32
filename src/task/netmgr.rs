@@ -125,11 +125,18 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
                         }
                     }
                 }
-
                 // Notify others of status change
-                let _ = status_sender.try_send(status);
-                let _ = active_net_sender.try_send(status.active);
-                let _ = active_lte_sender.try_send(status.active); // Added for LTE
+                if let Err(e) = status_sender.try_send(status) {
+                    warn!("[NetMgr] Failed to send status: {e:?}");
+                }
+
+                if let Err(e) = active_net_sender.try_send(status.active) {
+                    warn!("[NetMgr] Failed to send active net: {e:?}");
+                }
+
+                if let Err(e) = active_lte_sender.try_send(status.active) {
+                    warn!("[NetMgr] Failed to send active LTE: {e:?}");
+                }
             }
             embassy_futures::select::Either::Second(_) => {
                 info!("[NetMgr] Health check timeout reached");
@@ -141,9 +148,17 @@ pub async fn net_manager_task(spawner: Spawner) -> ! {
         if let Ok(requested_connection) = switch_receiver.try_receive() {
             if can_switch_to(&status, requested_connection) {
                 perform_net_switch(&mut status, requested_connection).await;
-                let _ = status_sender.try_send(status);
-                let _ = active_net_sender.try_send(status.active);
-                let _ = active_lte_sender.try_send(status.active); // Added for LTE
+                if let Err(e) = status_sender.try_send(status) {
+                    warn!("[NETMGR] Failed to send status: {e:?}");
+                }
+
+                if let Err(e) = active_net_sender.try_send(status.active) {
+                    warn!("[NETMGR] Failed to send active_net: {e:?}");
+                }
+
+                if let Err(e) = active_lte_sender.try_send(status.active) {
+                    warn!("[NETMGR] Failed to send active_lte: {e:?}");
+                }
             } else {
                 warn!("[NetMgr] Cannot switch to {requested_connection:?} - not available");
             }
@@ -159,14 +174,14 @@ async fn net_health_monitor(
     loop {
         Timer::after(HEALTH_CHECK_INTERVAL).await;
         if esp_wifi::wifi::wifi_state() != WifiState::StaConnected {
-            event_sender
-                .try_send(ConnectionEvent::WiFiDisconnected)
-                .unwrap();
+            if let Err(e) = event_sender.try_send(ConnectionEvent::WiFiDisconnected) {
+                warn!("[NetMgr] Failed to send WiFiDisconnected event: {e:?}");
+            }
             info!("[NetMgr] WiFi disconnected");
         } else {
-            event_sender
-                .try_send(ConnectionEvent::WiFiConnected)
-                .unwrap();
+            if let Err(e) = event_sender.try_send(ConnectionEvent::WiFiConnected) {
+                warn!("[NetMgr] Failed to send WiFiConnected event: {e:?}");
+            }
             info!("[NetMgr] WiFi is connected");
         }
     }
@@ -183,7 +198,9 @@ async fn lte_health_monitor(
         // Will be fix this code after quectel state machine refactor
         // For now, we assume LTE is connected if the state is not None
         if !lte_is_connected() {
-            let _ = event_sender.try_send(ConnectionEvent::LteDisconnected);
+            if let Err(e) = event_sender.try_send(ConnectionEvent::LteDisconnected) {
+                warn!("[NETMGR] Failed to send LteDisconnected event: {e:?}");
+            }
         }
     }
 }

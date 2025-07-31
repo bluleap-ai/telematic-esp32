@@ -31,7 +31,11 @@ const UNREGISTERED_SEARCHING: u8 = 2;
 const REGISTRATION_DENIED: u8 = 3;
 const REGISTRATION_FAILED: u8 = 4;
 const REGISTERED_ROAMING: u8 = 5;
-
+#[derive(Debug)]
+pub enum UploadError {
+    HeaplessStringOverflow,
+    ClientSendError,
+}
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TripData {
     device_id: heapless::String<36>,
@@ -86,11 +90,15 @@ async fn handle_publish_mqtt_data(
     let mut is_gps_success = false;
     let mut is_can_success = false;
 
-    writeln!(
+    if writeln!(
         &mut trip_topic,
         "channels/{mqtt_client_id}/messages/client/trip"
     )
-    .unwrap();
+    .is_err()
+    {
+        error!("[LTE] Failed to write MQTT trip topic");
+        return false;
+    }
 
     // --- GPS Data ---
     let trip_result = client.send(&RetrieveGpsRmc).await;
@@ -102,8 +110,14 @@ async fn handle_publish_mqtt_data(
             let timestamp = utc_date_to_unix_timestamp(&res.utc, &res.date);
             let mut device_id = heapless::String::new();
             let mut trip_id = heapless::String::new();
-            write!(&mut trip_id, "{mqtt_client_id}").unwrap();
-            write!(&mut device_id, "{mqtt_client_id}").unwrap();
+            if write!(&mut trip_id, "{mqtt_client_id}").is_err() {
+                error!("[LTE] Failed to write trip_id");
+                return false;
+            }
+            if write!(&mut device_id, "{mqtt_client_id}").is_err() {
+                error!("[LTE] Failed to write device_id");
+                return false;
+            }
 
             let trip_data = TripData {
                 device_id,
@@ -175,11 +189,15 @@ async fn handle_publish_mqtt_data(
             data: frame.data,
         };
 
-        writeln!(
+        if writeln!(
             &mut can_topic,
             "channels/{mqtt_client_id}/messages/client/can"
         )
-        .unwrap();
+        .is_err()
+        {
+            error!("[LTE] Failed to write MQTT CAN topic");
+            return false;
+        }
 
         // Serialize to JSON
         if let Ok(len) = serde_json_core::to_slice(&can_data, &mut buf) {
@@ -248,11 +266,16 @@ pub async fn upload_mqtt_cert_files(
     ca_chain: &[u8],
     certificate: &[u8],
     private_key: &[u8],
-) -> bool {
+) -> Result<(), UploadError> {
     let mut raw_data = heapless::Vec::<u8, 4096>::new();
     raw_data.clear();
-    let mut subscriber = urc_channel.subscribe().unwrap();
-    let _ = client.send(&FileList).await.unwrap();
+    let mut subscriber = urc_channel
+        .subscribe()
+        .map_err(|_| UploadError::ClientSendError)?;
+    client
+        .send(&FileList)
+        .await
+        .map_err(|_| UploadError::ClientSendError)?;
     let now = embassy_time::Instant::now();
     while now.elapsed().as_secs() < 10 {
         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
@@ -265,12 +288,19 @@ pub async fn upload_mqtt_cert_files(
 
     // Remove old certs
     for name in ["crt.pem", "dvt.crt", "dvt.key"] {
-        let _ = client
-            .send(&FileDel {
-                name: heapless::String::from_str(name).unwrap(),
-            })
-            .await;
-        info!("Deleted old {name}");
+        let name_str = match heapless::String::from_str(name) {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[modem] Failed to create string for file name: {name}");
+                return Err(UploadError::HeaplessStringOverflow);
+            }
+        };
+        if let Err(e) = client.send(&FileDel { name: name_str }).await {
+            warn!("[modem] Failed to delete old file {name}: {e:?}");
+            // Continue anyway - file might not exist
+        } else {
+            info!("Deleted old {name}");
+        }
     }
 
     // Upload helper
@@ -279,125 +309,209 @@ pub async fn upload_mqtt_cert_files(
         name: &str,
         content: &[u8],
         raw_data: &mut heapless::Vec<u8, 4096>,
-    ) -> bool {
+    ) -> Result<(), UploadError> {
         //Sending file upload command to notify the modem about the file to be uploaded
-        let name_str = match heapless::String::from_str(name) {
-            Ok(s) => s,
-            Err(_) => {
-                error!("Heapless string overflow for file name: {name}");
-                return false;
-            }
-        };
+        let name_str =
+            heapless::String::from_str(name).map_err(|_| UploadError::HeaplessStringOverflow)?;
         //Notify the modem about the file to be uploaded
-        if let Err(e) = client
+        client
             .send(&FileUpl {
                 name: name_str,
                 size: content.len() as u32,
             })
             .await
-        {
-            error!("FileUpl command failed: {e:?}");
-            return false;
-        }
+            .map_err(|_| UploadError::ClientSendError)?;
+
         //Uploading data payload in 1 Kib of chunks
         for chunk in content.chunks(1024) {
             raw_data.clear();
-            if raw_data.extend_from_slice(chunk).is_err() {
-                error!("Raw data buffer overflow");
-                return false;
-            };
+            raw_data
+                .extend_from_slice(chunk)
+                .map_err(|_| UploadError::HeaplessStringOverflow)?;
 
-            if let Err(_e) = client
+            client
                 .send(&SendRawData {
                     raw_data: raw_data.clone(),
                     len: chunk.len(),
                 })
                 .await
-            {
-                error!("SendRawData command failed");
-                return false;
-            }
+                .map_err(|_| UploadError::ClientSendError)?;
         }
 
         embassy_time::Timer::after(embassy_time::Duration::from_secs(1)).await;
-        true
+        Ok(())
     }
 
     // Upload certs
     info!("Uploading CA cert...");
-    upload_file(client, "crt.pem", ca_chain, &mut raw_data).await;
+    upload_file(client, "crt.pem", ca_chain, &mut raw_data).await?;
 
     info!("Uploading client cert...");
-    upload_file(client, "dvt.crt", certificate, &mut raw_data).await;
+    upload_file(client, "dvt.crt", certificate, &mut raw_data).await?;
 
     info!("Uploading client key...");
-    upload_file(client, "dvt.key", private_key, &mut raw_data).await;
+    upload_file(client, "dvt.key", private_key, &mut raw_data).await?;
 
     // Configure MQTTS
     info!("Configuring MQTT over TLS...");
-    let _ = client
+    let recv_mode_name = match heapless::String::from_str("recv/mode") {
+        Ok(s) => s,
+        Err(_) => {
+            error!("[LTE] Failed to create string for recv/mode config");
+            return Err(UploadError::HeaplessStringOverflow);
+        }
+    };
+    if let Err(e) = client
         .send(&MqttConfig {
-            name: heapless::String::from_str("recv/mode").unwrap(),
+            name: recv_mode_name,
             param_1: Some(0),
             param_2: Some(0),
             param_3: Some(1),
         })
-        .await;
-    let _ = client
+        .await
+    {
+        error!("[LTE] Failed to configure MQTT recv/mode: {e:?}");
+        return Err(UploadError::ClientSendError);
+    }
+
+    let ssl_name = match heapless::String::from_str("SSL") {
+        Ok(s) => s,
+        Err(_) => {
+            error!("[LTE] Failed to create string for SSL config");
+            return Err(UploadError::HeaplessStringOverflow);
+        }
+    };
+    if let Err(e) = client
         .send(&MqttConfig {
-            name: heapless::String::from_str("SSL").unwrap(),
+            name: ssl_name,
             param_1: Some(0),
             param_2: Some(1),
             param_3: Some(2),
         })
-        .await;
+        .await
+    {
+        error!("[LTE] Failed to configure MQTT SSL: {e:?}");
+        return Err(UploadError::ClientSendError);
+    }
 
     for (cfg_name, path) in [
         ("cacert", "UFS:ca.crt"),
         ("clientcert", "UFS:dvt.crt"),
         ("clientkey", "UFS:dvt.key"),
     ] {
-        let _ = client
+        let config_name = match heapless::String::from_str(cfg_name) {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[LTE] Failed to create string for config name: {cfg_name}");
+                return Err(UploadError::HeaplessStringOverflow);
+            }
+        };
+
+        let cert_path = match heapless::String::from_str(path) {
+            Ok(s) => s,
+            Err(_) => {
+                error!("[LTE] Failed to create string for cert path: {path}");
+                return Err(UploadError::HeaplessStringOverflow);
+            }
+        };
+
+        if let Err(e) = client
             .send(&SslConfigCert {
-                name: heapless::String::from_str(cfg_name).unwrap(),
+                name: config_name,
                 context_id: 2,
-                cert_path: Some(heapless::String::from_str(path).unwrap()),
+                cert_path: Some(cert_path),
             })
-            .await;
+            .await
+        {
+            error!("[LTE] Failed to configure SSL cert {cfg_name}: {e:?}");
+            return Err(UploadError::ClientSendError);
+        }
     }
 
-    let _ = client
+    let name_seclevel = match heapless::String::from_str("seclevel") {
+        Ok(s) => s,
+        Err(_) => {
+            error!("[modem] Failed to create string for seclevel config");
+            return Err(UploadError::HeaplessStringOverflow);
+        }
+    };
+
+    if let Err(e) = client
         .send(&SslConfigOther {
-            name: heapless::String::from_str("seclevel").unwrap(),
+            name: name_seclevel,
             context_id: 2,
             level: 2,
         })
-        .await;
-    let _ = client
+        .await
+    {
+        error!("[modem] Failed to configure SSL security level: {e:?}");
+        return Err(UploadError::ClientSendError);
+    }
+
+    let sslversion_name = match heapless::String::from_str("sslversion") {
+        Ok(s) => s,
+        Err(_) => {
+            error!("[modem] Failed to create string for sslversion config");
+            return Err(UploadError::HeaplessStringOverflow);
+        }
+    };
+    if let Err(e) = client
         .send(&SslConfigOther {
-            name: heapless::String::from_str("sslversion").unwrap(),
+            name: sslversion_name,
             context_id: 2,
             level: 4,
         })
-        .await;
-    let _ = client.send(&SslSetCipherSuite).await;
-    let _ = client
+        .await
+    {
+        error!("[modem] Failed to configure SSL version: {e:?}");
+        return Err(UploadError::ClientSendError);
+    }
+
+    if let Err(e) = client.send(&SslSetCipherSuite).await {
+        error!("[modem] Failed to set SSL cipher suite: {e:?}");
+        return Err(UploadError::ClientSendError);
+    }
+
+    let ignorelocaltime_name = match heapless::String::from_str("ignorelocaltime") {
+        Ok(s) => s,
+        Err(_) => {
+            error!("[modem] Failed to create string for ignorelocaltime config");
+            return Err(UploadError::HeaplessStringOverflow);
+        }
+    };
+    if let Err(e) = client
         .send(&SslConfigOther {
-            name: heapless::String::from_str("ignorelocaltime").unwrap(),
+            name: ignorelocaltime_name,
             context_id: 2,
             level: 1,
         })
-        .await;
-    let _ = client
+        .await
+    {
+        error!("[modem] Failed to configure SSL ignore local time: {e:?}");
+        return Err(UploadError::ClientSendError);
+    }
+
+    let version_name = match heapless::String::from_str("version") {
+        Ok(s) => s,
+        Err(_) => {
+            error!("[modem] Failed to create string for version config");
+            return Err(UploadError::HeaplessStringOverflow);
+        }
+    };
+    if let Err(e) = client
         .send(&MqttConfig {
-            name: heapless::String::from_str("version").unwrap(),
+            name: version_name,
             param_1: Some(0),
             param_2: Some(4),
             param_3: None,
         })
-        .await;
+        .await
+    {
+        error!("[modem] Failed to configure MQTT version: {e:?}");
+        return Err(UploadError::ClientSendError);
+    }
 
-    true
+    Ok(())
 }
 
 pub async fn check_network_registration(
@@ -679,33 +793,41 @@ pub async fn quectel_tx_handler(
             }
             State::UploadMqttCert => {
                 info!("[Quectel] Upload Files");
-                let res: bool = upload_mqtt_cert_files(
+                match upload_mqtt_cert_files(
                     &mut client,
                     urc_channel,
                     ca_chain,
                     certificate,
                     private_key,
                 )
-                .await;
-                state = if res {
-                    State::CheckNetworkRegistration
-                } else {
-                    error!("[Quectel] File upload failed, resetting hardware");
-                    State::ErrorConnection
-                };
+                .await
+                {
+                    Ok(()) => {
+                        info!("[Quectel] File upload successful");
+                        state = State::CheckNetworkRegistration;
+                    }
+                    Err(e) => {
+                        error!("[Quectel] File upload failed with error: {e:?}");
+                        state = State::ErrorConnection;
+                    }
+                }
             }
             State::CheckNetworkRegistration => {
                 info!("[Quectel] Check Network Registration");
                 let res = check_network_registration(&mut client).await;
                 if res {
                     if !is_connected {
-                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteRegistered);
+                        if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteRegistered) {
+                            warn!("[LTE] Failed to send LTE Connected event: {e:?}");
+                        }
                         is_connected = true;
                     }
                     state = State::MqttOpenConnection;
                 } else {
                     if is_connected {
-                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteUnregistered);
+                        if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteUnregistered) {
+                            warn!("[LTE] Failed to send LTE Connected event: {e:?}");
+                        }
                         is_connected = false;
                     }
                     error!("[Quectel] Network registration failed, resetting hardware");
@@ -729,12 +851,16 @@ pub async fn quectel_tx_handler(
                 match connect_mqtt_broker(&mut client, urc_channel).await {
                     Ok(_) => {
                         info!("[Quectel] MQTT connection established");
-                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected);
+                        if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteConnected) {
+                            warn!("[LTE] Failed to send LTE Connected event: {e:?}");
+                        }
                         state = State::MqttPublishData;
                     }
                     Err(e) => {
                         error!("[Quectel] MQTT connection failed: {e:?}");
-                        let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
+                        if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected) {
+                            warn!("[LTE] Failed to send LTE Connected event: {e:?}");
+                        }
                         state = State::ErrorConnection;
                     }
                 }
@@ -754,7 +880,9 @@ pub async fn quectel_tx_handler(
             }
             State::ErrorConnection => {
                 if is_connected {
-                    let _ = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected);
+                    if let Err(e) = CONN_EVENT_CHAN.try_send(ConnectionEvent::LteDisconnected) {
+                        warn!("[LTE] Failed to send LTE Connected event: {e:?}");
+                    }
                     is_connected = false;
                 }
                 error!("[Quectel] System in error state - attempting recovery");
