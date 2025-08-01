@@ -91,143 +91,149 @@ pub async fn ota_handler(
     trng: &'static mut Trng<'static>,
     stack: &'static Stack<'static>,
 ) -> ! {
-    let mut ota = match Ota::new(FlashStorage::new()) {
-        Ok(ota) => ota,
-        Err(e) => {
-            log_error!("Failed to create OTA instance, error: {:?}", e);
-            panic!("Failed to create OTA instance");
-        }
-    };
-
-    // Log current partition info
-    if let Some(part) = ota.get_currently_booted_partition() {
-        log_info!(
-            "Running from partition: {}, base: {}",
-            format_args!("ota_{}", part),
-            format_args!("0x{:x}", if part == 0 { 0x10000 } else { 0x1c0000 })
-        );
-    }
-
-    // Verify partition state
-    if let Ok(state) = ota.get_ota_image_state() {
-        if state != OtaImgState::EspOtaImgValid {
-            log_warn!("Current partition not marked as valid");
-            // Optionally mark as valid if needed
-            //let _ = ota.ota_mark_app_valid();
-        }
-    }
-
-    spawner
-        .spawn(work_queue_task())
-        .expect("work queue task spawn");
-
-    let mac_address = Efuse::mac_address();
-    let mac_str = format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac_address[0],
-        mac_address[1],
-        mac_address[2],
-        mac_address[3],
-        mac_address[4],
-        mac_address[5]
-    );
-
-    let identity = {
-        let mut store = KeyStore::new();
-        // Set MAC address as device identity - should never fail with a valid MAC
-        if let Err(_e) = store.set_item("mac", &mac_str) {
-            panic!("Cannot create device identity: failed to set MAC address in keystore - this is a critical system error");
+    'ota: {
+        let mut ota = match Ota::new(FlashStorage::new()) {
+            Ok(ota) => ota,
+            Err(e) => {
+                log_error!("Failed to create OTA instance, error: {:?}", e);
+                break 'ota;
+            }
         };
 
-        store
-    };
+        // Log current partition info
+        if let Some(part) = ota.get_currently_booted_partition() {
+            log_info!(
+                "Running from partition: {}, base: {}",
+                format_args!("ota_{}", part),
+                format_args!("0x{:x}", if part == 0 { 0x10000 } else { 0x1c0000 })
+            );
+        }
 
-    let device_type = env!("ESP_DEVICE_TYPE");
-    let device_name = env!("ESP_DEVICE_NAME");
-    let device_version = env!("ESP_DEVICE_VERSION");
-    let tenant_token = option_env!("MENDER_CLIENT_TENANT_TOKEN");
-    let config = MenderClientConfig::new(
-        identity,
-        &format!("{device_name}-{device_version}"),
-        device_type,
-        option_env!("MENDER_CLIENT_URL").unwrap_or("https://hosted.mender.io"),
-        tenant_token,
-    )
-    .with_auth_interval(60)
-    .with_update_interval(120)
-    .with_recommissioning(false)
-    .with_device_update_done_reset(true);
+        // Verify partition state
+        if let Ok(state) = ota.get_ota_image_state() {
+            if state != OtaImgState::EspOtaImgValid {
+                log_warn!("Current partition not marked as valid");
+                // Optionally mark as valid if needed
+                //let _ = ota.ota_mark_app_valid();
+            }
+        }
 
-    // Creating an instance:
-    let callbacks = MenderClientCallbacks::new(
-        network_connect_cb,
-        network_release_cb,
-        authentication_success_cb,
-        authentication_failure_cb,
-        deployment_status_cb,
-        restart_cb,
-    );
+        spawner
+            .spawn(work_queue_task())
+            .expect("work queue task spawn");
 
-    mender_client_init(&config, &callbacks, trng, *stack)
+        let mac_address = Efuse::mac_address();
+        let mac_str = format!(
+            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            mac_address[0],
+            mac_address[1],
+            mac_address[2],
+            mac_address[3],
+            mac_address[4],
+            mac_address[5]
+        );
+
+        let identity = {
+            let mut store = KeyStore::new();
+            // Set MAC address as device identity - should never fail with a valid MAC
+            if let Err(_e) = store.set_item("mac", &mac_str) {
+                log_error!("Cannot create device identity: failed to set MAC address in keystore - this is a critical system error");
+                break 'ota;
+            };
+
+            store
+        };
+
+        let device_type = env!("ESP_DEVICE_TYPE");
+        let device_name = env!("ESP_DEVICE_NAME");
+        let device_version = env!("ESP_DEVICE_VERSION");
+        let tenant_token = option_env!("MENDER_CLIENT_TENANT_TOKEN");
+        let config = MenderClientConfig::new(
+            identity,
+            &format!("{device_name}-{device_version}"),
+            device_type,
+            option_env!("MENDER_CLIENT_URL").unwrap_or("https://hosted.mender.io"),
+            tenant_token,
+        )
+        .with_auth_interval(60)
+        .with_update_interval(120)
+        .with_recommissioning(false)
+        .with_device_update_done_reset(true);
+
+        // Creating an instance:
+        let callbacks = MenderClientCallbacks::new(
+            network_connect_cb,
+            network_release_cb,
+            authentication_success_cb,
+            authentication_failure_cb,
+            deployment_status_cb,
+            restart_cb,
+        );
+
+        mender_client_init(&config, &callbacks, trng, *stack)
+            .await
+            .expect("Failed to init mender client");
+
+        // In your main function or setup code:
+        match mender_client::mender_client_register_addon(
+            &MENDER_INVENTORY_ADDON_INSTANCE,
+            Some(&INVENTORY_CONFIG), // Use the static config
+            None,
+        )
         .await
-        .expect("Failed to init mender client");
+        {
+            Ok(_) => {
+                log_info!("Mender inventory add-on registered successfully");
+            }
+            Err(_) => {
+                log_error!("Failed to register mender-inventory add-on");
+                break 'ota;
+            }
+        }
 
-    // In your main function or setup code:
-    match mender_client::mender_client_register_addon(
-        &MENDER_INVENTORY_ADDON_INSTANCE,
-        Some(&INVENTORY_CONFIG), // Use the static config
-        None,
-    )
-    .await
-    {
-        Ok(_) => {
-            log_info!("Mender inventory add-on registered successfully");
+        // Define the inventory items
+        let inventory = [
+            KeyStoreItem {
+                name: "mender-mcu-client".to_string(),
+                value: env!("CARGO_PKG_VERSION").to_string(),
+            },
+            KeyStoreItem {
+                name: "latitude".to_string(),
+                value: "45.8325".to_string(),
+            },
+            KeyStoreItem {
+                name: "longitude".to_string(),
+                value: "6.864722".to_string(),
+            },
+        ];
+
+        let mut keystore = KeyStore::new();
+        for item in &inventory {
+            if let Err(_e) = keystore.set_item(&item.name, &item.value) {
+                log_error!("Cannot create device inventory: failed to add item '{item.name}' to keystore: {_e:?}");
+                break 'ota;
+            }
         }
-        Err(_) => {
-            log_error!("Unable to register mender-inventory add-on");
-            panic!("Failed to register mender-inventory add-on");
+        // Set the inventory
+        match mender_inventory::mender_inventory_set(&keystore).await {
+            Ok(_) => {
+                log_info!("Mender inventory set successfully");
+            }
+            Err(_) => {
+                log_error!("Unable to set mender inventory");
+            }
         }
+
+        match mender_client_activate().await {
+            MenderStatus::Done => {
+                log_info!("Client activated successfully");
+            }
+            _ => {
+                log_error!("Failed to activate client");
+                break 'ota;
+            }
+        };
     }
-
-    // Define the inventory items
-    let inventory = [
-        KeyStoreItem {
-            name: "mender-mcu-client".to_string(),
-            value: env!("CARGO_PKG_VERSION").to_string(),
-        },
-        KeyStoreItem {
-            name: "latitude".to_string(),
-            value: "45.8325".to_string(),
-        },
-        KeyStoreItem {
-            name: "longitude".to_string(),
-            value: "6.864722".to_string(),
-        },
-    ];
-
-    let mut keystore = KeyStore::new();
-    for item in &inventory {
-        if let Err(_e) = keystore.set_item(&item.name, &item.value) {
-            panic!("Cannot create device inventory: failed to add item '{item.name}' to keystore: {_e:?}");
-        }
-    }
-    // Set the inventory
-    match mender_inventory::mender_inventory_set(&keystore).await {
-        Ok(_) => {
-            log_info!("Mender inventory set successfully");
-        }
-        Err(_) => {
-            log_error!("Unable to set mender inventory");
-        }
-    }
-
-    match mender_client_activate().await {
-        MenderStatus::Done => {
-            log_info!("Client activated successfully");
-        }
-        _ => panic!("Failed to activate client"),
-    };
-
     loop {
         Timer::after(Duration::from_secs(1)).await;
     }

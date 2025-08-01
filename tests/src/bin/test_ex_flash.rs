@@ -48,7 +48,7 @@ async fn main(_spawner: Spawner) -> ! {
         Ok(spi) => spi.with_sck(sclk).with_mosi(mosi).with_miso(miso),
         Err(e) => {
             error!("Failed to initialize SPI: {e:?}");
-            panic!("Cannot continue without flash initialization");
+            panic!("Cannot continue without flash initialization"); //We cannot continue without flash
         }
     };
 
@@ -64,7 +64,7 @@ async fn main(_spawner: Spawner) -> ! {
         Ok(()) => info!("Flash initialized successfully."),
         Err(e) => {
             error!("Flash initialization failed: {e:?}");
-            panic!("Cannot continue without flash initialization");
+            panic!("Cannot continue without flash initialization"); //We cannot continue without flash
         }
     }
 

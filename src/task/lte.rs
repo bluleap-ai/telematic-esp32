@@ -32,8 +32,26 @@ const REGISTRATION_DENIED: u8 = 3;
 const REGISTRATION_FAILED: u8 = 4;
 const REGISTERED_ROAMING: u8 = 5;
 #[derive(Debug)]
+/// Represents errors that can occur during the upload process.
+///
+/// This enum is used to indicate specific issues that might arise when
+/// attempting to upload data. Each variant corresponds to a distinct
+/// type of error, and appropriate handling should be implemented for
+/// each case.
 pub enum UploadError {
+    /// Indicates that a `heapless::String` exceeded its maximum capacity.
+    ///
+    /// This error occurs when attempting to write more data into a
+    /// `heapless::String` than its allocated size allows. To handle this
+    /// error, ensure that the data being written fits within the string's
+    /// capacity or increase the string's size if possible.
     HeaplessStringOverflow,
+    /// Represents an error that occurred while sending data via the client.
+    ///
+    /// This error is returned when the underlying client fails to send
+    /// data, possibly due to connectivity issues or internal client errors.
+    /// Handling this error might involve retrying the operation or
+    /// checking the client's state.
     ClientSendError,
 }
 #[derive(Debug, Serialize, Deserialize, Clone)]

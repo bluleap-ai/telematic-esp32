@@ -86,7 +86,7 @@ async fn main(spawner: Spawner) -> ! {
     // If this fails, it's a hardware configuration error, and we cannot proceed.
     // Note: If UART0 is not available, this will panic, since we cannot use GPS or LTE without it.
     let uart0 = Uart::new(peripherals.UART0, config)
-        .expect("UART0 initialization failed: check hardware configuration")
+        .expect("UART0 initialization failed: check hardware configuration") // also panic but it mostly will not happen
         .with_rx(uart_rx_pin)
         .with_tx(uart_tx_pin)
         .into_async();
