@@ -65,7 +65,10 @@ impl<'a> MqttClient<'a> {
     }
 
     pub async fn disconnect(&mut self) {
-        let _ = self.session.close().await;
+        match self.session.close().await {
+            Ok(_) => info!("[MQTT] Session closed successfully"),
+            Err(e) => error!("[MQTT] Failed to close session: {e:?}"),
+        }
         self.connection_state = false;
     }
 
@@ -112,7 +115,13 @@ impl<'a> MqttClient<'a> {
 
     async fn send(&mut self, packet: Packet<'_>) -> Result<(), MqttError> {
         let mut buffer = [0u8; 4096];
-        let len = encode_slice(&packet, &mut buffer).unwrap();
+        let len = match encode_slice(&packet, &mut buffer) {
+            Ok(len) => len,
+            Err(e) => {
+                error!("Failed to encode MQTT packet: {e:?}");
+                return Err(MqttError::Overflow);
+            }
+        };
         match self.session.write(&buffer[..len]).await {
             Ok(_) => Ok(()),
             Err(e) => {

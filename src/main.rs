@@ -39,7 +39,7 @@ use esp_hal::{
     uart::{Config, RxConfig, Uart},
 };
 use esp_wifi::{init, EspWifiController};
-use log::info;
+use log::{info, warn};
 use static_cell::StaticCell;
 use task::lte::TripData;
 use task::netmgr::net_manager_task;
@@ -67,17 +67,7 @@ async fn main(spawner: Spawner) -> ! {
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     esp_hal_embassy::init(timg1.timer0);
     let trng = &mut *mk_static!(Trng<'static>, Trng::new(peripherals.RNG, peripherals.ADC1));
-    //let trng = &*mk_static!(
-    //    Mutex<Trng<'static>, EspWifiController<'static>>,
-    //    Mutex::new(Trng::new(peripherals.RNG, peripherals.ADC1))
-    //);
-    let init = &*mk_static!(
-        EspWifiController<'static>,
-        init(timg0.timer0, trng.rng, peripherals.RADIO_CLK).unwrap()
-    );
-    let wifi = peripherals.WIFI;
-    let (controller, wifi_interface) = esp_wifi::wifi::new(init, wifi).unwrap();
-    let config = embassy_net::Config::dhcpv4(Default::default());
+
     #[cfg(feature = "wdg")]
     let mut rtc = {
         let mut rtc = Rtc::new(peripherals.LPWR);
@@ -86,24 +76,17 @@ async fn main(spawner: Spawner) -> ! {
         rtc
     };
 
-    let seed = 1234;
-
-    let (stack, runner) = embassy_net::new(
-        wifi_interface.sta,
-        config,
-        mk_static!(StackResources<3>, StackResources::<3>::new()),
-        seed,
-    );
-    let stack = &*mk_static!(Stack, stack);
-
     let uart_tx_pin = peripherals.GPIO23;
     let uart_rx_pin = peripherals.GPIO15;
     let quectel_pen_pin = Output::new(peripherals.GPIO21, Level::High, OutputConfig::default());
     let quectel_dtr_pin = Output::new(peripherals.GPIO22, Level::High, OutputConfig::default());
 
     let config = Config::default().with_rx(RxConfig::default().with_fifo_full_threshold(64));
+    // SAFETY: UART0 is guaranteed to be available and the pins are correctly configured.
+    // If this fails, it's a hardware configuration error, and we cannot proceed.
+    // Note: If UART0 is not available, this will panic, since we cannot use GPS or LTE without it.
     let uart0 = Uart::new(peripherals.UART0, config)
-        .unwrap()
+        .expect("UART0 initialization failed: check hardware configuration") // also panic but it mostly will not happen
         .with_rx(uart_rx_pin)
         .with_tx(uart_tx_pin)
         .into_async();
@@ -145,18 +128,64 @@ async fn main(spawner: Spawner) -> ! {
     let (can_rx, _can_tx) = can.split();
 
     let gps_channel = &*GPS_CHANNEL.init(Channel::new());
+
+    let wifi_config = embassy_net::Config::dhcpv4(Default::default());
+
+    // Initialize the WiFi controller but if it fails, we will not proceed with the WiFi tasks. we can still use LTE.
+    'wifi_tasks: {
+        let init = match init(timg0.timer0, trng.rng, peripherals.RADIO_CLK) {
+            Ok(init) => &*mk_static!(EspWifiController<'static>, init),
+            Err(e) => {
+                warn!("Failed to initialize controller: {e:?}");
+                break 'wifi_tasks;
+            }
+        };
+
+        let wifi = peripherals.WIFI;
+        let (controller, wifi_interface) = match esp_wifi::wifi::new(init, wifi) {
+            Ok((c, w)) => (c, w),
+            Err(e) => {
+                warn!("Failed to initialize WiFi: {e:?}");
+                break 'wifi_tasks;
+            }
+        };
+
+        let seed = 1234;
+        let (stack, runner) = embassy_net::new(
+            wifi_interface.sta,
+            wifi_config,
+            mk_static!(StackResources<3>, StackResources::<3>::new()),
+            seed,
+        );
+        let stack = &*mk_static!(Stack, stack);
+        spawner.spawn(connection(controller)).ok();
+        spawner.spawn(net_task(runner)).ok();
+        spawner
+            .spawn(mqtt_handler(
+                stack,
+                channel,
+                gps_channel,
+                peripherals.SHA,
+                peripherals.RSA,
+            ))
+            .ok();
+
+        spawner.spawn(net_manager_task(spawner)).ok();
+        #[cfg(feature = "ota")]
+        //wait until wifi connected
+        {
+            loop {
+                if stack.is_link_up() {
+                    break;
+                }
+                Timer::after(Duration::from_millis(500)).await;
+            }
+            spawner
+                .spawn(ota_handler(spawner, trng, stack))
+                .expect("Failed to spawn OTA handler task");
+        }
+    }
     spawner.spawn(can_receiver(can_rx, channel)).ok();
-    spawner.spawn(connection(controller)).ok();
-    spawner.spawn(net_task(runner)).ok();
-    spawner
-        .spawn(mqtt_handler(
-            stack,
-            channel,
-            gps_channel,
-            peripherals.SHA,
-            peripherals.RSA,
-        ))
-        .ok();
     spawner.spawn(quectel_rx_handler(ingress, uart_rx)).ok();
     spawner
         .spawn(quectel_tx_handler(
@@ -168,21 +197,6 @@ async fn main(spawner: Spawner) -> ! {
             channel,
         ))
         .ok();
-
-    spawner.spawn(net_manager_task(spawner)).ok();
-    #[cfg(feature = "ota")]
-    //wait until wifi connected
-    {
-        loop {
-            if stack.is_link_up() {
-                break;
-            }
-            Timer::after(Duration::from_millis(500)).await;
-        }
-        spawner
-            .spawn(ota_handler(spawner, trng, stack))
-            .expect("Failed to spawn OTA handler task");
-    }
 
     // WDG feed task
     loop {
