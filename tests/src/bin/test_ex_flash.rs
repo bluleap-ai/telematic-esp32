@@ -39,16 +39,18 @@ async fn main(_spawner: Spawner) -> ! {
     let miso = peripherals.GPIO20;
     let mosi = peripherals.GPIO19;
     let cs_pin = Output::new(peripherals.GPIO3, Level::High, OutputConfig::default());
-    let spi = Spi::new(
+    let spi = match Spi::new(
         peripherals.SPI2,
         Config::default()
             .with_frequency(Rate::from_khz(100u32))
             .with_mode(Mode::_0), // CPOL = 0, CPHA = 0 (Mode 0 per datasheet)
-    )
-    .unwrap()
-    .with_sck(sclk)
-    .with_mosi(mosi)
-    .with_miso(miso);
+    ) {
+        Ok(spi) => spi.with_sck(sclk).with_mosi(mosi).with_miso(miso),
+        Err(e) => {
+            error!("Failed to initialize SPI: {e:?}");
+            panic!("Cannot continue without flash initialization"); //We cannot continue without flash
+        }
+    };
 
     // Run the test directly
     info!("Starting flash communication test...");
@@ -62,7 +64,7 @@ async fn main(_spawner: Spawner) -> ! {
         Ok(()) => info!("Flash initialized successfully."),
         Err(e) => {
             error!("Flash initialization failed: {e:?}");
-            panic!("Cannot continue without flash initialization");
+            panic!("Cannot continue without flash initialization"); //We cannot continue without flash
         }
     }
 

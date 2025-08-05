@@ -267,16 +267,18 @@ async fn main(_spawner: Spawner) -> ! {
     let miso = peripherals.GPIO20;
     let mosi = peripherals.GPIO19;
     let cs = Output::new(peripherals.GPIO3, Level::High, OutputConfig::default());
-    let spi = Spi::new(
+    let spi = match Spi::new(
         peripherals.SPI2,
         Config::default()
             .with_frequency(Rate::from_khz(100u32))
             .with_mode(Mode::_0),
-    )
-    .unwrap()
-    .with_sck(sclk)
-    .with_mosi(mosi)
-    .with_miso(miso);
+    ) {
+        Ok(spi) => spi.with_sck(sclk).with_mosi(mosi).with_miso(miso),
+        Err(e) => {
+            error!("Failed to initialize SPI: {e:?}");
+            panic!("Cannot continue without flash"); //We cannot continue without flash
+        }
+    };
 
     let mut flash = W25Q128FVSG::new(spi, cs);
 
@@ -285,7 +287,7 @@ async fn main(_spawner: Spawner) -> ! {
         Ok(()) => info!("✓ Flash initialized successfully"),
         Err(e) => {
             error!("✗ Flash initialization failed: {e:?}");
-            panic!("Cannot continue without flash");
+            panic!("Cannot continue without flash"); //We cannot continue without flash
         }
     }
 
