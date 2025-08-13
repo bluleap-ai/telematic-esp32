@@ -1,12 +1,10 @@
 // Import core macros needed by Serde in no_std environment
 use core::marker::PhantomData;
 use embassy_time::{Duration, Timer};
-use esp_hal::{
-    gpio::Output,
-    spi::master::{Config, Spi},
-    Blocking,
-};
-
+use esp_hal::delay::{self, Delay};
+use esp_hal::gpio::Output;
+use esp_hal::spi::master::Spi;
+use esp_hal::Blocking;
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
 #[repr(u8)]
@@ -32,13 +30,15 @@ pub enum SpiCommand {
     EnableReset = 0x66,
     ResetDevice = 0x99,
 }
-
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub enum ExFlashError {
     AddressInvalid,
     LenInvalid,
     SpiError,
     WriteEnableFailed,
+    Timeout,
+    WriteFailed,
     //DeviceBusy,
     //WriteProtected,
     //BufferTooLarge,
@@ -50,9 +50,10 @@ const BUSY_BIT: u8 = 0x01;
 const WEL_BIT: u8 = 0x02;
 
 // Timing constants (from datasheet)
-const PAGE_SIZE: usize = 256;
-const SECTOR_SIZE: usize = 4096;
-const FLASH_CAPACITY: u32 = 16 * 1024 * 1024; // 16MB for W25Q128FV
+pub const PAGE_SIZE: usize = 256;
+pub const SECTOR_SIZE: usize = 4096;
+pub const FLASH_CAPACITY: u32 = 16 * 1024 * 1024; // 16MB for W25Q128FV
+static DELAY: Delay = Delay::new(); // OK nếu `Delay::new()` là const fn
 
 #[derive(Debug)]
 pub struct W25Q128FVSG<'d> {
@@ -60,7 +61,6 @@ pub struct W25Q128FVSG<'d> {
     cs: Output<'d>,
     _mode: PhantomData<Blocking>,
 }
-
 #[allow(dead_code)]
 impl<'d> W25Q128FVSG<'d> {
     pub fn new(spi: Spi<'d, Blocking>, cs: Output<'d>) -> Self {
@@ -145,9 +145,9 @@ impl<'d> W25Q128FVSG<'d> {
     }
 
     /// Wait for device to become ready
-    pub async fn wait_ready(&mut self) -> Result<(), ExFlashError> {
+    pub fn wait_ready(&mut self) -> Result<(), ExFlashError> {
         while self.is_busy()? {
-            Timer::after(Duration::from_millis(1)).await;
+            Delay::delay_millis(&DELAY, 1);
         }
         Ok(())
     }
@@ -159,7 +159,7 @@ impl<'d> W25Q128FVSG<'d> {
     }
 
     /// Send write enable command
-    pub async fn write_enable(&mut self) -> Result<(), ExFlashError> {
+    pub fn write_enable(&mut self) -> Result<(), ExFlashError> {
         self.cs.set_low();
         self.spi
             .write(&[SpiCommand::WriteEnable as u8])
@@ -167,7 +167,7 @@ impl<'d> W25Q128FVSG<'d> {
         self.cs.set_high();
 
         // Verify write enable was set
-        Timer::after(Duration::from_micros(10)).await;
+        DELAY.delay_micros(10);
 
         if !self.is_write_enabled()? {
             return Err(ExFlashError::WriteEnableFailed);
@@ -248,7 +248,7 @@ impl<'d> W25Q128FVSG<'d> {
     }
 
     /// Write data to flash memory (page program)
-    pub async fn write_data(&mut self, address: u32, data: &[u8]) -> Result<(), ExFlashError> {
+    pub fn write_data(&mut self, address: u32, data: &[u8]) -> Result<(), ExFlashError> {
         // Validate inputs
         self.is_valid_address(address);
 
@@ -267,8 +267,8 @@ impl<'d> W25Q128FVSG<'d> {
         // Check if we would exceed flash capacity
         self.validate_address_range(address, data.len())?;
 
-        self.wait_ready().await?;
-        self.write_enable().await?;
+        self.wait_ready()?;
+        self.write_enable()?;
 
         let command = [
             SpiCommand::PageProgram as u8,
@@ -287,18 +287,18 @@ impl<'d> W25Q128FVSG<'d> {
         self.cs.set_high();
 
         // Wait for programming to complete
-        self.wait_ready().await?;
+        self.wait_ready()?;
         Ok(())
     }
 
     /// Erase 4KB sector
-    pub async fn erase_sector(&mut self, address: u32) -> Result<(), ExFlashError> {
+    pub fn erase_sector(&mut self, address: u32) -> Result<(), ExFlashError> {
         // Validate address and align to sector boundary
         self.is_valid_address(address);
         let aligned_address = address & !(SECTOR_SIZE as u32 - 1);
 
-        self.wait_ready().await?;
-        self.write_enable().await?;
+        self.wait_ready()?;
+        self.write_enable()?;
 
         let command = [
             SpiCommand::SectorErase4Kb as u8,
@@ -314,18 +314,18 @@ impl<'d> W25Q128FVSG<'d> {
         self.cs.set_high();
 
         // Wait for erase to complete
-        self.wait_ready().await?;
+        self.wait_ready()?;
         Ok(())
     }
 
     /// Erase 64KB block
-    pub async fn erase_block_64kb(&mut self, address: u32) -> Result<(), ExFlashError> {
+    pub fn erase_block_64kb(&mut self, address: u32) -> Result<(), ExFlashError> {
         // Validate address and align to 64KB boundary
         self.is_valid_address(address);
         let aligned_address = address & !((64 * 1024) - 1);
 
-        self.wait_ready().await?;
-        self.write_enable().await?;
+        self.wait_ready()?;
+        self.write_enable()?;
 
         let command = [
             SpiCommand::BlockErase64Kb as u8,
@@ -341,7 +341,7 @@ impl<'d> W25Q128FVSG<'d> {
         self.cs.set_high();
 
         // Wait for erase to complete (64KB takes longer - up to 2000ms)
-        self.wait_ready().await?;
+        self.wait_ready()?;
         Ok(())
     }
 
@@ -351,8 +351,8 @@ impl<'d> W25Q128FVSG<'d> {
         self.is_valid_address(address);
         let aligned_address = address & !((32 * 1024) - 1);
 
-        self.wait_ready().await?;
-        self.write_enable().await?;
+        self.wait_ready()?;
+        self.write_enable()?;
 
         let command = [
             SpiCommand::BlockErase32Kb as u8,
@@ -368,14 +368,14 @@ impl<'d> W25Q128FVSG<'d> {
         self.cs.set_high();
 
         // Wait for erase to complete
-        self.wait_ready().await?;
+        self.wait_ready()?;
         Ok(())
     }
 
     /// Erase entire chip
     pub async fn erase_chip(&mut self) -> Result<(), ExFlashError> {
-        self.wait_ready().await?;
-        self.write_enable().await?;
+        self.wait_ready()?;
+        self.write_enable()?;
 
         self.cs.set_low();
         self.spi
@@ -384,7 +384,7 @@ impl<'d> W25Q128FVSG<'d> {
         self.cs.set_high();
 
         // Wait for erase to complete (this can take a very long time - up to 200 seconds)
-        self.wait_ready().await?;
+        self.wait_ready()?;
         Ok(())
     }
 
@@ -438,7 +438,7 @@ impl<'d> W25Q128FVSG<'d> {
 
     /// Write a single byte
     pub async fn write_byte(&mut self, address: u32, data: u8) -> Result<(), ExFlashError> {
-        self.write_data(address, &[data]).await
+        self.write_data(address, &[data])
     }
 
     /// Get device capacity in bytes
