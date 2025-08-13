@@ -106,7 +106,7 @@ async fn main(_spawner: Spawner) -> ! {
     let mut read_data = [0u8; 4];
 
     info!("Writing data to address {address:#08x}: {write_data:02x?}");
-    match flash.write_data(address, &write_data).await {
+    match flash.write_data(address, &write_data) {
         Ok(()) => info!("✓ Data written successfully"),
         Err(e) => {
             error!("✗ Write failed: {e:?}");
@@ -116,6 +116,8 @@ async fn main(_spawner: Spawner) -> ! {
                 ExFlashError::LenInvalid => error!("Invalid data length"),
                 ExFlashError::SpiError => error!("SPI communication error"),
                 ExFlashError::WriteEnableFailed => error!("Could not enable write"),
+                ExFlashError::Timeout => error!("Took too long"),
+                ExFlashError::WriteFailed => error!("Failed to write data"),
                 //_ => error!("Other write error"),
             }
         }
@@ -147,7 +149,7 @@ async fn main(_spawner: Spawner) -> ! {
     // Test sector erase
     let sector_addr = address; // Use the actual address, not sector number
     info!("Erasing sector at address {sector_addr:#08x}...");
-    match flash.erase_sector(sector_addr).await {
+    match flash.erase_sector(sector_addr) {
         Ok(()) => info!("✓ Sector erased successfully"),
         Err(e) => {
             error!("✗ Sector erase failed: {e:?}");
@@ -208,7 +210,7 @@ async fn main(_spawner: Spawner) -> ! {
     // Test writing at page boundary
     let page_boundary = 0x2100; // Should be at page boundary (256-byte aligned)
     let boundary_data = [0x12, 0x34];
-    match flash.write_data(page_boundary, &boundary_data).await {
+    match flash.write_data(page_boundary, &boundary_data) {
         Ok(()) => info!("✓ Page boundary write successful"),
         Err(e) => info!("Page boundary write result: {e:?}"),
     }
