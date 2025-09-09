@@ -1,15 +1,18 @@
 #![no_std]
 #![no_main]
+extern crate alloc;
 
 // Declare modules at the crate root
 mod cfg;
 mod hal;
+mod modem;
 mod net;
 mod task;
 mod util;
-
+use modem::*;
 // Import the necessary modules
 //use crate::hal::flash;
+use crate::cfg::net_cfg::MQTT_CLIENT_ID;
 use crate::net::atcmd::Urc;
 use task::can::*;
 use task::lte::*;
@@ -39,9 +42,8 @@ use esp_hal::{
     uart::{Config, RxConfig, Uart},
 };
 use esp_wifi::{init, EspWifiController};
-use log::{info, warn};
+use log::{error, info, warn};
 use static_cell::StaticCell;
-use task::lte::TripData;
 use task::netmgr::net_manager_task;
 pub type GpsOutbox = Channel<NoopRawMutex, TripData, 8>;
 static GPS_CHANNEL: StaticCell<GpsOutbox> = StaticCell::new();
@@ -124,9 +126,9 @@ async fn main(spawner: Spawner) -> ! {
     );
     let can = twai_config.start();
     static CHANNEL: StaticCell<TwaiOutbox> = StaticCell::new();
-    let channel = &*CHANNEL.init(Channel::new());
+    let can_channel = &*CHANNEL.init(Channel::new());
     let (can_rx, _can_tx) = can.split();
-
+    spawner.spawn(can_receiver(can_rx, can_channel)).ok();
     let gps_channel = &*GPS_CHANNEL.init(Channel::new());
 
     let wifi_config = embassy_net::Config::dhcpv4(Default::default());
@@ -163,7 +165,7 @@ async fn main(spawner: Spawner) -> ! {
         spawner
             .spawn(mqtt_handler(
                 stack,
-                channel,
+                can_channel,
                 gps_channel,
                 peripherals.SHA,
                 peripherals.RSA,
@@ -185,19 +187,37 @@ async fn main(spawner: Spawner) -> ! {
                 .expect("Failed to spawn OTA handler task");
         }
     }
-    spawner.spawn(can_receiver(can_rx, channel)).ok();
-    spawner.spawn(quectel_rx_handler(ingress, uart_rx)).ok();
+    spawner.spawn(modem_rx_handle(ingress, uart_rx)).ok();
+    // Initialize modem
+    let mut quectel = Modem::new(
+        client,
+        quectel_pen_pin,
+        quectel_dtr_pin,
+        &URC_CHANNEL,
+        ModemModel::QuectelEG800k,
+    );
+    info!("Initializing modem...");
+    if let Err(e) = quectel.modem_init().await {
+        error!("Modem initialization failed: {e:?}");
+    } else {
+        info!("Modem initialized successfully");
+    }
+
+    let ca_chain = include_str!("../cert/crt.pem").as_bytes();
+    let certificate = include_str!("../cert/dvt.crt").as_bytes();
+    let private_key = include_str!("../cert/dvt.key").as_bytes();
+    // Handle spawner.spawn Result
     spawner
-        .spawn(quectel_tx_handler(
-            client,
-            quectel_pen_pin,
-            quectel_dtr_pin,
-            &URC_CHANNEL,
+        .spawn(lte_mqtt_handler(
+            MQTT_CLIENT_ID,
+            quectel,
+            can_channel,
             gps_channel,
-            channel,
+            ca_chain,
+            certificate,
+            private_key,
         ))
         .ok();
-
     // WDG feed task
     loop {
         Timer::after_secs(2).await;

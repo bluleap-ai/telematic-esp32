@@ -30,9 +30,11 @@ pub fn utc_date_to_unix_timestamp(utc: &[u8], date: &[u8]) -> u64 {
 
     // Add days for past months in the current year
     let leap = is_leap_year(year) as usize;
-    for m in 0..(month - 1) as usize {
-        days += DAYS_IN_MONTH[leap][m] as u64;
-    }
+    days += DAYS_IN_MONTH[leap]
+        .iter()
+        .take((month.saturating_sub(1)) as usize)
+        .map(|&d| d as u64)
+        .sum::<u64>();
 
     // Add days in the current month
     days += day as u64 - 1;

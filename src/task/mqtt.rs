@@ -8,19 +8,16 @@ use esp_mbedtls::{asynch::Session, Certificates, Mode, Tls, TlsVersion, X509};
 // use esp_println::println;
 use log::{error, info, warn};
 
-use crate::task::lte::TripData;
+use crate::modem::TripData;
 use embassy_sync::channel::Channel;
 
 use crate::cfg::net_cfg::*;
 use crate::net::{dns::DnsBuilder, mqtt::MqttClient};
 use crate::task::can::TwaiOutbox;
 // use crate::task::netmgr::CONN_EVENT_CHAN;
-use crate::task::netmgr::{ActiveConnection, ACTIVE_CONNECTION_CHAN_NET};
+use crate::task::netmgr::{get_active_connection, ActiveConnection};
 use core::fmt::Write;
-use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-
-static IS_WIFI: AtomicBool = AtomicBool::new(false);
 
 #[allow(clippy::uninlined_format_args)]
 #[embassy_executor::task]
@@ -39,19 +36,14 @@ pub async fn mqtt_handler(
         }
     };
     loop {
-        if let Ok(active_connection) = ACTIVE_CONNECTION_CHAN_NET.receiver().try_receive() {
-            IS_WIFI.store(
-                active_connection == ActiveConnection::WiFi,
-                Ordering::SeqCst,
-            );
-            info!("[MQTT] Updated IS_WIFI: {}", IS_WIFI.load(Ordering::SeqCst));
-        }
-
-        // Check if WiFi is active, wait if not
-        if !IS_WIFI.load(Ordering::SeqCst) {
-            Timer::after(Duration::from_millis(500)).await;
+        let active_connection = get_active_connection().await;
+        if active_connection != ActiveConnection::WiFi {
+            info!("[MQTT] Connection is not WiFi ({:?})", active_connection);
+            Timer::after(Duration::from_millis(1000)).await;
             continue;
         }
+
+        info!("[MQTT] WiFi is active");
 
         // Ensure the stack is connected
         if !stack.is_link_up() {
@@ -123,7 +115,7 @@ pub async fn mqtt_handler(
             if let Ok(frame) = can_channel.try_receive() {
                 let mut frame_str: heapless::String<80> = heapless::String::new();
                 let mut can_topic: heapless::String<80> = heapless::String::new();
-
+                info!("[WIFI] CAN data received from channel: {frame:?}");
                 if writeln!(
                     &mut frame_str,
                     "{{\"id\": \"{:08X}\", \"len\": {}, \"data\": \"{:02X?}\"}}",
